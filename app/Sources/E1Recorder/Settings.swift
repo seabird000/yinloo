@@ -43,11 +43,14 @@ struct PlatformInfo {
 }
 
 enum AppLinks {
-    static let repo = URL(string: "https://github.com/seabird000/E1Recorder")!
-    static let releases = URL(string: "https://github.com/seabird000/E1Recorder/releases")!
-    static let issues = URL(string: "https://github.com/seabird000/E1Recorder/issues/new")!
-    static let license = URL(string: "https://github.com/seabird000/E1Recorder/blob/main/LICENSE")!
-    static let latestAPI = URL(string: "https://api.github.com/repos/seabird000/E1Recorder/releases/latest")!
+    static let website = URL(string: "https://yinloo.com")!
+    /// 下载新版走官网安装页：国内自动给阿里云的下载地址（GitHub 在国内常打不开），海外给 GitHub。
+    static let download = URL(string: "https://yinloo.com/install#download")!
+    static let repo = URL(string: "https://github.com/seabird000/yinloo")!
+    static let releases = URL(string: "https://github.com/seabird000/yinloo/releases")!
+    static let issues = URL(string: "https://github.com/seabird000/yinloo/issues/new")!
+    static let license = URL(string: "https://github.com/seabird000/yinloo/blob/main/LICENSE")!
+    static let latestAPI = URL(string: "https://api.github.com/repos/seabird000/yinloo/releases/latest")!
     static let buildMonth = "2026 年 11 月"
     static var version: String { Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "开发版" }
 }
@@ -94,7 +97,7 @@ final class AppSettings: ObservableObject {
     @Published var customASRModel: String { didSet { d.set(customASRModel, forKey: "customASRModel") } }
     @Published var customLLMModel: String { didSet { d.set(customLLMModel, forKey: "customLLMModel") } }
     @Published private(set) var maskedCustomKey: String?
-    /// Menu bar icon style: "ring" (声纹录音键), "bars" (声波), "pen" (录音笔).
+    /// Menu bar icon style: "mic" (像素话筒), "bars" (声波), "pen" (录音笔). See MenuBarIcon.styles.
     @Published var menuIcon: String { didSet { d.set(menuIcon, forKey: "menuIcon") } }
     /// Open notes in Obsidian when they live inside an Obsidian vault.
     @Published var openInObsidian: Bool { didSet { d.set(openInObsidian, forKey: "openInObsidian") } }
@@ -168,6 +171,15 @@ final class AppSettings: ObservableObject {
     @Published var noteFormat: String { didSet { d.set(noteFormat, forKey: "noteFormat") } }
     /// Keep this Mac's copy of each recording after its note is written (the pen's own recording is never touched).
     @Published var keepAudio: Bool { didSet { d.set(keepAudio, forKey: "keepAudio") } }
+    /// Transcribe new Voice Memos recordings (made on this Mac, or on iPhone and synced here by iCloud) automatically.
+    /// Turning it on starts from that moment, so recordings made before are never billed by surprise.
+    @Published var voiceMemos: Bool {
+        didSet {
+            d.set(voiceMemos, forKey: "voiceMemos")
+            if voiceMemos && !oldValue { voiceMemosSince = Date() }
+        }
+    }
+    @Published var voiceMemosSince: Date? { didSet { d.set(voiceMemosSince, forKey: "voiceMemosSince") } }
     @Published private(set) var maskedKey: String?
 
     private init() {
@@ -182,7 +194,7 @@ final class AppSettings: ObservableObject {
         customEndpoint = d.string(forKey: "customEndpoint") ?? "https://api.openai.com/v1"
         customASRModel = d.string(forKey: "customASRModel") ?? "whisper-1"
         customLLMModel = d.string(forKey: "customLLMModel") ?? "gpt-4o-mini"
-        menuIcon = d.string(forKey: "menuIcon") ?? "ring"
+        menuIcon = MenuBarIcon.normalized(d.string(forKey: "menuIcon"))   // 1.4.0: the old default "ring" became "mic"
         openInObsidian = d.object(forKey: "openInObsidian") as? Bool ?? true
         budgetYuan = d.object(forKey: "budgetYuan") as? Int ?? 50
         hotwords = d.string(forKey: "hotwords") ?? ""
@@ -212,6 +224,8 @@ final class AppSettings: ObservableObject {
         autoSync = d.object(forKey: "autoSync") as? Bool ?? true
         noteFormat = d.string(forKey: "noteFormat") ?? "md"
         keepAudio = d.object(forKey: "keepAudio") as? Bool ?? true
+        voiceMemos = d.bool(forKey: "voiceMemos")
+        voiceMemosSince = d.object(forKey: "voiceMemosSince") as? Date
         if UIPreview.enabled {
             // Screenshot aid: -previewNoKey YES shows the app before any key is filled in.
             let none = UserDefaults.standard.bool(forKey: "previewNoKey")
@@ -306,7 +320,7 @@ final class AppSettings: ObservableObject {
         var openInObsidian: Bool?; var budgetYuan: Int?; var hotwords: String?
         var wifiEnabled: Bool?; var ossEndpoint: String?; var ossBucket: String?; var wifiIntervalMin: Int?
         var knownSpeakers: [String]?; var placeNames: [String: String]?; var knownNetworks: [String: String]?
-        var noteFormat: String?; var keepAudio: Bool?
+        var noteFormat: String?; var keepAudio: Bool?; var voiceMemos: Bool?
         var notesFolder: String; var audioFolder: String
         var organizer: String; var minDurationSec: Int; var autoSync: Bool
     }
@@ -320,7 +334,7 @@ final class AppSettings: ObservableObject {
                          openInObsidian: openInObsidian, budgetYuan: budgetYuan, hotwords: hotwords,
                          wifiEnabled: wifiEnabled, ossEndpoint: ossEndpoint, ossBucket: ossBucket, wifiIntervalMin: wifiIntervalMin,
                          knownSpeakers: knownSpeakers, placeNames: placeNames, knownNetworks: knownNetworks,
-                         noteFormat: noteFormat, keepAudio: keepAudio,
+                         noteFormat: noteFormat, keepAudio: keepAudio, voiceMemos: voiceMemos,
                          notesFolder: tildify(notesFolder), audioFolder: tildify(audioFolder),
                          organizer: organizer, minDurationSec: minDurationSec, autoSync: autoSync)
         let enc = JSONEncoder()
@@ -348,7 +362,7 @@ final class AppSettings: ObservableObject {
         if let v = e.customEndpoint { customEndpoint = v }
         if let v = e.customASRModel { customASRModel = v }
         if let v = e.customLLMModel { customLLMModel = v }
-        if let v = e.menuIcon { menuIcon = v }
+        if let v = e.menuIcon { menuIcon = MenuBarIcon.normalized(v) }
         if let v = e.openInObsidian { openInObsidian = v }
         if let v = e.budgetYuan { budgetYuan = v }
         if let v = e.hotwords { hotwords = v }
@@ -358,6 +372,7 @@ final class AppSettings: ObservableObject {
         if let v = e.wifiIntervalMin { wifiIntervalMin = v }
         if let v = e.noteFormat { noteFormat = v }
         if let v = e.keepAudio { keepAudio = v }
+        if let v = e.voiceMemos { voiceMemos = v }   // on a new Mac it starts from now, never from the old Mac's date
         if let v = e.knownSpeakers { knownSpeakers = Array(Set(knownSpeakers + v)).sorted() }
         if let v = e.placeNames { placeNames.merge(v) { _, new in new } }
         if let v = e.knownNetworks { knownNetworks.merge(v) { old, _ in old } }
@@ -458,7 +473,7 @@ enum Keychain {
         if status == errSecItemNotFound {
             var q = query(account)
             q[kSecValueData as String] = data
-            q[kSecAttrLabel as String] = "E1录音助手 访问密钥"
+            q[kSecAttrLabel as String] = "音录 访问密钥"
             return SecItemAdd(q as CFDictionary, nil) == errSecSuccess
         }
         return status == errSecSuccess

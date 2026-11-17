@@ -7,21 +7,16 @@ struct MenuPanel: View {
     @EnvironmentObject var pipeline: Pipeline
     @ObservedObject private var recorder = MacRecorder.shared
     @Environment(\.openWindow) private var openWindow
-    /// The one-time note under the status icons.
-    @AppStorage("panelIconHintDismissed") private var hintDismissed = false
+    /// The device row opened to show its details and actions (one at a time, like Control Center).
+    @State private var expanded: DeviceKind? = UIPreview.enabled ? DeviceKind(rawValue: UserDefaults.standard.string(forKey: "previewExpand") ?? "") : nil
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             UpdateBanner()
-            DeviceRow().padding(.horizontal, 14).frame(height: 42)
-            if !hintDismissed {
-                HStack(spacing: 6) {
-                    Text("图标依次是数据线、WiFi、电量和转写服务").font(.e1Sub).foregroundStyle(Color.t2)
-                    Spacer(minLength: 4)
-                    Button("知道了") { hintDismissed = true }.buttonStyle(.e1Link).font(.e1Sub)
-                }
-                .padding(.horizontal, 14).padding(.bottom, 4)
+            VStack(spacing: 0) {
+                ForEach(pipeline.panelDevices) { PanelDeviceRow(kind: $0, expanded: $expanded) }
             }
+            .padding(.horizontal, 8)
 
             HStack(spacing: 0) {
                 Button { Task { await pipeline.syncNow() } } label: { syncLabel }
@@ -56,6 +51,8 @@ struct MenuPanel: View {
                 Spacer()
                 if !settings.isConfigured {
                     Button("未设置转写平台 ›") { NSApp.activate(ignoringOtherApps: true); openWindow(id: "welcome") }.buttonStyle(.e1Link)
+                } else {
+                    CloudStatusButton()
                 }
             }
             .padding(.horizontal, 14).padding(.vertical, 4)
@@ -64,7 +61,7 @@ struct MenuPanel: View {
             if recent.isEmpty {
                 VStack(spacing: 2) {
                     Text("还没有转写记录").font(.e1Body).foregroundStyle(Color.t2)
-                    Text("插上录音笔或导入音频后显示在这里").font(.e1Sub).foregroundStyle(Color.t2)
+                    Text("设备里的新录音、上传的音频转写后显示在这里").font(.e1Sub).foregroundStyle(Color.t2)
                 }
                 .frame(maxWidth: .infinity).frame(height: 58)
             } else {
@@ -105,15 +102,15 @@ struct MenuPanel: View {
             BigLabel(symbol: "arrow.triangle.2.circlepath", title: "同步中…",
                      sub: pipeline.isCopying
                         ? (pipeline.copySource == "WiFi" ? "云端取回 " : "USB 拷贝 ") + "\(min(pipeline.copyDone + 1, pipeline.copyTotal)) / \(pipeline.copyTotal)"
-                        : (pipeline.syncPhase ?? "检查笔和云端") + "…",
+                        : (pipeline.syncPhase ?? "检查设备") + "…",
                      spinning: true)
         } else if let r = pipeline.syncResult {
             BigLabel(symbol: "checkmark", title: "同步完成", sub: r)
         } else if !pipeline.canSyncNow {
-            BigLabel(symbol: "arrow.triangle.2.circlepath", title: "云端同步", sub: "未连接设备")
+            BigLabel(symbol: "arrow.triangle.2.circlepath", title: "立即同步", sub: "未连接设备")
         } else {
-            BigLabel(symbol: "arrow.triangle.2.circlepath", title: "云端同步",
-                     sub: pipeline.lastSync.map { "上次 " + DateFormatter.cached("HH:mm").string(from: $0) } ?? "尚未同步")
+            BigLabel(symbol: "arrow.triangle.2.circlepath", title: "立即同步",
+                     sub: pipeline.lastAnySync.map { "上次 " + DateFormatter.cached("HH:mm").string(from: $0) } ?? "尚未同步")
         }
     }
 
@@ -136,33 +133,76 @@ struct PanelSeparator: View {
     var body: some View { Rectangle().fill(Color.e1Sep).frame(height: 1).padding(.horizontal, 14).padding(.vertical, 6) }
 }
 
-// MARK: device row
+// MARK: devices
 
-struct DeviceRow: View {
+/// One device in the panel: icon, name, compact status. Clicking opens it in place (details, 立即同步, 设置…),
+/// the way Control Center opens a module.
+struct PanelDeviceRow: View {
     @EnvironmentObject var pipeline: Pipeline
+    @Environment(\.openWindow) private var openWindow
+    let kind: DeviceKind
+    @Binding var expanded: DeviceKind?
+    @State private var hover = false
+
     var body: some View {
-        HStack(spacing: 10) {
-            ZStack {
-                let on = pipeline.penConnected || pipeline.wifiOnline
-                Circle().fill(on ? Color.e1Blue : Color.primary.opacity(0.08))
-                PenGlyph(body_: on ? .white : Color.primary.opacity(0.3),
-                         detail: on ? .e1Blue : Color.dyn(0xDCDCDE, 0x4A4A4C))
-                    .frame(width: 16, height: 16)
+        let st = pipeline.deviceStatus(kind)
+        let open = expanded == kind
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: 10) {
+                PanelDeviceGlyph(kind: kind, active: st.active)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(kind.name).font(.e1Body).foregroundStyle(Color.t1)
+                    if kind == .e1 {
+                        PenStatusLine(compact: true)
+                    } else {
+                        Text(st.shortText)
+                            .font(.e1Sub).foregroundStyle(st.level == .problem ? Color.e1Red : Color.t2).lineLimit(1)
+                    }
+                }
+                Spacer(minLength: 0)
+                Image(systemName: "chevron.right").font(.system(size: 10, weight: .semibold)).foregroundStyle(Color.t3)
+                    .rotationEffect(.degrees(open ? 90 : 0))
             }
-            .frame(width: 26, height: 26)
-            VStack(alignment: .leading, spacing: 2) {
-                Text("搜狗 E1 录音笔").font(.e1Body).foregroundStyle(Color.t1)
-                PenStatusLine(compact: true)
+            .padding(.horizontal, 6).frame(height: 42)
+            .background(hover || open ? Color.primary.opacity(0.06) : .clear, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+            .contentShape(Rectangle())
+            .onHover { hover = $0 }
+            .onTapGesture { withAnimation(.easeOut(duration: 0.15)) { expanded = open ? nil : kind } }
+            .accessibilityElement(children: .combine)
+            .accessibilityAddTraits(.isButton)
+            .accessibilityHint(open ? "收起" : "展开详细状态")
+
+            if open {
+                VStack(alignment: .leading, spacing: 3) {
+                    ForEach(st.details.isEmpty ? [st.line] : st.details, id: \.self) {
+                        Text($0).font(.e1Sub).foregroundStyle(Color.t2).lineLimit(2).fixedSize(horizontal: false, vertical: true)
+                    }
+                    HStack(spacing: 8) {
+                        if pipeline.isEnabled(kind) {
+                            Button(kind.syncVerb) { Task { await pipeline.syncDevice(kind) } }
+                                .buttonStyle(PillButtonStyle(height: 22)).font(.e1Sub)
+                                .disabled(!pipeline.canSync(kind) || pipeline.manualSync)
+                        }
+                        Button("设置…") {
+                            SettingsNav.openDevice(kind)
+                            NSApp.activate(ignoringOtherApps: true)
+                            openWindow(id: "settings")
+                        }
+                        .buttonStyle(PillButtonStyle(height: 22)).font(.e1Sub)
+                    }
+                    .padding(.top, 5)
+                }
+                .padding(.leading, 42).padding(.trailing, 8).padding(.top, 4).padding(.bottom, 10)
             }
-            Spacer(minLength: 0)
-            CloudStatusButton()
         }
     }
 }
 
-/// Green cloud: Aliyun (transcription, and the WiFi mailbox if used) answers. Grey: something is wrong — click to recheck.
+/// The transcription service, next to 最近转写: green cloud when Aliyun answers, grey when something is wrong
+/// (click to check again; still wrong opens Preferences).
 struct CloudStatusButton: View {
     @EnvironmentObject var pipeline: Pipeline
+    @EnvironmentObject var settings: AppSettings
     @Environment(\.openWindow) private var openWindow
     @State private var checking = false
     var body: some View {
@@ -174,16 +214,17 @@ struct CloudStatusButton: View {
                 if pipeline.cloudOK == false { NSApp.activate(ignoringOtherApps: true); openWindow(id: "settings") }
             }
         } label: {
-            ZStack {
-                Circle().fill(Color.primary.opacity(0.06)).frame(width: 26, height: 26)
+            HStack(spacing: 4) {
+                Text(settings.provider.info.name).font(.e1Sub).foregroundStyle(Color.t2)
                 if checking {
-                    ProgressView().controlSize(.mini)
+                    ProgressView().controlSize(.mini).frame(width: 14, height: 12)
                 } else {
                     Image(systemName: pipeline.cloudOK == true ? "cloud.fill" : "cloud")
-                        .font(.system(size: 12, weight: .semibold))
+                        .font(.system(size: 11, weight: .semibold))
                         .foregroundStyle(pipeline.cloudOK == true ? Color.e1Green : Color.t3)
                 }
             }
+            .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .help(pipeline.cloudOK == true ? "阿里云连接正常：\(pipeline.cloudDetail)" : "阿里云连接异常：\(pipeline.cloudDetail)（点按重新检查）")

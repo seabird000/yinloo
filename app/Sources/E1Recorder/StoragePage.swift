@@ -32,7 +32,7 @@ struct StoragePage: View {
                 Toggle("保留录音文件", isOn: $s.keepAudio).toggleStyle(.switch)
                 if s.keepAudio { FolderRow(title: "保存位置", path: $s.audioFolder) }
             } header: {
-                SectionTitle("录音", info: "关闭后，纪要生成后就删掉这台 Mac 上的录音副本（包括本机录音），纪要里也不再附录音链接；录音笔里的原始录音不受影响。")
+                SectionTitle("录音", info: "录音按来源分文件夹存放：搜狗E1、语音备忘录、本机录音、导入，里面再按月份分（1.4.0 之前录音笔的录音直接按月份放）。\n\n「保留录音文件」关闭后，纪要生成后就删掉这台 Mac 上的录音副本（包括本机录音），纪要里也不再附录音链接；录音笔和语音备忘录里的原始录音不受影响。")
             }
 
             Section("纪要模板") {

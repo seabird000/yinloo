@@ -21,7 +21,7 @@ enum Diagnostics {
         var out: [String] = []
         func line(_ k: String, _ v: Any?) { out.append("\(k)：\(v.map { "\($0)" } ?? "—")") }
         let os = ProcessInfo.processInfo.operatingSystemVersion
-        out.append("E1录音助手 诊断信息 · " + DateFormatter.cached("yyyy-MM-dd HH:mm").string(from: Date()))
+        out.append("音录 诊断信息 · " + DateFormatter.cached("yyyy-MM-dd HH:mm").string(from: Date()))
         out.append("")
         line("应用版本", AppLinks.version)
         line("上传程序（内置）", Bundled.uploaderVersion)
@@ -51,6 +51,17 @@ enum Diagnostics {
             line("最近心跳", "无")
         }
         if let e = p.wifiError { line("WiFi 错误", e) }
+        out.append("")
+        out.append("[语音备忘录]")
+        line("自动转写", s.voiceMemos ? "开" : "关")
+        if s.voiceMemos {
+            line("起始时间", s.voiceMemosSince.map { DateFormatter.cached("yyyy-MM-dd HH:mm").string(from: $0) })
+            if let m = p.memoScan {
+                line("上次检查", relativeTime(m.at))
+                line("录音条数", "\(m.total)（开启前 \(m.before)，等待中 \(m.settling)）")
+                if let pr = m.problem { line("问题", String(describing: pr)) }
+            }
+        }
         out.append("")
         out.append("[录音笔]")
         line("USB 连接", p.penConnected ? "是" : "否")
@@ -102,7 +113,7 @@ enum Diagnostics {
     static func export() {
         NSApp.activate(ignoringOtherApps: true)
         let panel = NSSavePanel()
-        panel.nameFieldStringValue = "E1录音助手诊断信息.txt"
+        panel.nameFieldStringValue = "音录诊断信息.txt"
         guard panel.runModal() == .OK, let url = panel.url else { return }
         try? report(AppSettings.shared, Pipeline.shared).write(to: url, atomically: true, encoding: .utf8)
         NSWorkspace.shared.activateFileViewerSelecting([url])

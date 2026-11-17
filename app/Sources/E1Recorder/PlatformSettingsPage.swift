@@ -6,14 +6,9 @@ import UniformTypeIdentifiers
 struct PlatformSettingsPage: View {
     @EnvironmentObject var s: AppSettings
     @EnvironmentObject var pipeline: Pipeline
-    enum Edit: String, Identifiable { case key, appId, endpoint, asrModel, llmModel, bucket, ossEndpoint; var id: String { rawValue } }
+    enum Edit: String, Identifiable { case key, appId, endpoint, asrModel, llmModel; var id: String { rawValue } }
     @State private var editing: Edit?
     @State private var testing = false
-    @State private var editingPenKey = false
-    @State private var editingMacKey = false
-    @State private var showGuide = false
-    @State private var storageTesting = false
-    @State private var storageResult: String?
 
     var body: some View {
         Form {
@@ -76,46 +71,6 @@ struct PlatformSettingsPage: View {
             }
 
             Section {
-                LabeledContent("存储空间") {
-                    HStack { Trailing(text: s.ossBucket.isEmpty ? "未填写" : s.ossBucket); Button("编辑…") { editing = .bucket } }
-                }
-                LabeledContent("地域节点") {
-                    HStack { Trailing(text: s.ossEndpoint.isEmpty ? "未填写" : s.ossEndpoint); Button("编辑…") { editing = .ossEndpoint } }
-                }
-                LabeledContent("录音笔用钥匙") {
-                    HStack { Trailing(text: s.penKeyStored ? "已存入钥匙串" : "未填写"); Button(s.penKeyStored ? "修改…" : "填写…") { editingPenKey = true } }
-                }
-                LabeledContent("Mac 用钥匙") {
-                    HStack { Trailing(text: s.macKeyStored ? "已存入钥匙串" : "未填写"); Button(s.macKeyStored ? "修改…" : "填写…") { editingMacKey = true } }
-                }
-                LabeledContent("连接测试") {
-                    HStack(spacing: 8) {
-                        if storageTesting { ProgressView().controlSize(.small) }
-                        else if let r = storageResult {
-                            if r.isEmpty { HStack(spacing: 6) { Dot(kind: .ok); Text("两把钥匙都正常") } }
-                            else { HStack(spacing: 6) { Dot(kind: .bad); Text(r).lineLimit(1).frame(maxWidth: 200, alignment: .trailing) } }
-                        }
-                        Button("测试") {
-                            Task {
-                                storageTesting = true
-                                storageResult = UIPreview.enabled ? "" : (await pipeline.testWifi() ?? "")
-                                if storageResult == "" { s.wifiEnabled = true }
-                                storageTesting = false
-                            }
-                        }
-                        .disabled(storageTesting || s.ossBucket.isEmpty || !s.penKeyStored || !s.macKeyStored)
-                    }
-                }
-                Toggle("启用 WiFi 同步", isOn: $s.wifiEnabled).toggleStyle(.switch)
-            } header: {
-                HStack {
-                    SectionTitle("云存储", info: "WiFi 同步用的信箱：录音笔连上 WiFi 后，把新录音传到你阿里云账号里的这个存储空间；这台 Mac 取回、转写后清空。录音笔的钥匙只能上传，Mac 的钥匙只能读取和删除。")
-                    Spacer()
-                    Button("设置步骤…") { showGuide = true }.buttonStyle(.link).font(.callout)
-                }
-            }
-
-            Section {
                 Picker("预算提醒", selection: $s.budgetYuan) {
                     Text("不提醒").tag(0)
                     ForEach([30, 50, 100, 200], id: \.self) { Text("每月 ¥\($0)").tag($0) }
@@ -126,15 +81,6 @@ struct PlatformSettingsPage: View {
 
         }
         .sheet(item: $editing) { e in sheet(e) }
-        .sheet(isPresented: $editingPenKey) { KeyPairSheet(pen: true) }
-        .sheet(isPresented: $editingMacKey) { KeyPairSheet(pen: false) }
-        .sheet(isPresented: $showGuide) {
-            VStack(spacing: 0) {
-                WifiGuideView()
-                HStack { Spacer(); Button("完成") { showGuide = false }.keyboardShortcut(.defaultAction) }.padding(16)
-            }
-            .frame(width: 600, height: 720)
-        }
     }
 
     @ViewBuilder private var connStatus: some View {
@@ -175,14 +121,6 @@ struct PlatformSettingsPage: View {
                       placeholder: "tw_…", initial: s.appId,
                       validate: { $0.hasPrefix("tw_") ? nil : "应以 tw_ 开头" },
                       save: { s.appId = $0; s.connState = "untested" })
-        case .bucket:
-            EditSheet(title: "存储空间名称", help: "阿里云 OSS 里为 WiFi 同步建的存储空间（Bucket）名称。", placeholder: "存储空间名称",
-                      initial: s.ossBucket, validate: { $0.range(of: "^[a-z0-9][a-z0-9-]{1,61}[a-z0-9]$", options: .regularExpression) != nil ? nil : "只能用小写字母、数字和短横线，3–63 个字符" },
-                      save: { s.ossBucket = $0 })
-        case .ossEndpoint:
-            EditSheet(title: "地域节点", help: "存储空间所在地域的访问域名，例如 oss-cn-beijing.aliyuncs.com。", placeholder: "oss-cn-beijing.aliyuncs.com",
-                      initial: s.ossEndpoint, validate: { $0.hasSuffix(".aliyuncs.com") && !$0.contains("/") ? nil : "应形如 oss-cn-beijing.aliyuncs.com" },
-                      save: { s.ossEndpoint = $0 })
         case .endpoint where s.provider == .custom:
             EditSheet(title: "编辑接口地址", help: "OpenAI 兼容接口的根地址，一般以 /v1 结尾，例如 https://api.openai.com/v1。",
                       placeholder: "https://api.openai.com/v1", initial: s.customEndpoint,

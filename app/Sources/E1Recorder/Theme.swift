@@ -223,7 +223,7 @@ struct Squircle: Shape {
 
 /// Sidebar icons (方案 B): gradient squircle, dark hairline, soft shadow, detailed white line glyph.
 struct SidebarIcon: View {
-    enum Glyph { case platform, storage, device, general, about }
+    enum Glyph { case platform, storage, device, general, about, voiceMemos }
     let glyph: Glyph
     var size: CGFloat = 20
 
@@ -239,6 +239,7 @@ struct SidebarIcon: View {
             case .device: (0x46D26F, 0x24B04F)     // green
             case .general: (0xAEAEB3, 0x8B8B90)    // grey
             case .about: (0x3A3A3C, 0x0C0C0D)      // graphite
+            case .voiceMemos: (0xFF5F57, 0xE5322D) // red, like Voice Memos' waveform
             }
             ctx.fill(tile, with: .linearGradient(Gradient(colors: [rgb(top), rgb(bottom)]),
                                                  startPoint: .zero, endPoint: CGPoint(x: 0, y: 20)))
@@ -312,6 +313,13 @@ struct SidebarIcon: View {
             ctx.fill(circle(10, 7, 0.9), with: white)
             var i = Path(); i.move(to: CGPoint(x: 10, y: 9.4)); i.addLine(to: CGPoint(x: 10, y: 13.8))
             ctx.stroke(i, with: white, style: line(1.6))
+        case .voiceMemos:
+            // a waveform: seven bars, tallest in the middle
+            var w = Path()
+            for (x, h) in [(4.0, 3.0), (6.0, 6.4), (8.0, 9.6), (10.0, 12.0), (12.0, 8.4), (14.0, 5.6), (16.0, 2.8)] as [(CGFloat, CGFloat)] {
+                w.move(to: CGPoint(x: x, y: 10 - h / 2)); w.addLine(to: CGPoint(x: x, y: 10 + h / 2))
+            }
+            ctx.stroke(w, with: white, style: line(1.25))
         }
     }
 }
@@ -334,11 +342,33 @@ struct PenGlyph: View {
 }
 
 /// Monochrome template images for the menu bar (dark menu bars invert them automatically). Three styles:
-/// "ring" 声纹录音键 (same as the app icon), "bars" 声波, "pen" 录音笔.
+/// "mic" 像素话筒 (same as the app icon; the default since 1.4.0), "bars" 声波, "pen" 录音笔.
 enum MenuBarIcon {
-    static let styles: [(id: String, name: String)] = [("ring", "声纹录音键"), ("bars", "声波"), ("pen", "录音笔")]
+    static let styles: [(id: String, name: String)] = [("mic", "像素话筒"), ("bars", "声波"), ("pen", "录音笔")]
 
-    private static let ringPattern: [CGFloat] = [1.2, 2.0, 2.8, 1.7, 1.0, 1.5, 2.5, 3.0, 2.0, 1.2, 1.7, 2.3, 1.3, 2.1, 2.7, 1.6, 1.0, 1.6]
+    /// Stored style → a current one: "ring" (声纹录音键, the default before 1.4.0) and anything unknown become "mic".
+    static func normalized(_ id: String?) -> String { styles.contains { $0.id == id } ? id! : "mic" }
+
+    /// The pixel microphone, one cell per point (crisp at 1× and 2×): a filled head, its holder, stem and base.
+    private static let micRows = [
+        "......kkkk......",
+        ".....kkkkkk.....",
+        ".....kkkkkk.....",
+        ".....kkkkkk.....",
+        ".....kkkkkk.....",
+        ".....kkkkkk.....",
+        "..k..kkkkkk..k..",
+        "..k..kkkkkk..k..",
+        "..k...kkkk...k..",
+        "...k........k...",
+        "....kk....kk....",
+        "......kkkk......",
+        ".......kk.......",
+        ".......kk.......",
+        ".....kkkkkk.....",
+    ]
+    /// Height of the sound slot cut into the head, per animation frame (it jumps while syncing or recording).
+    private static let micSlot = [4, 2, 5, 3]
     private static let barFrames: [[CGFloat]] = [[4, 9, 13, 7, 3], [9, 4, 7, 13, 6], [13, 7, 4, 9, 11], [7, 13, 9, 4, 7]]
     private static var cache: [String: NSImage] = [:]
 
@@ -365,21 +395,17 @@ enum MenuBarIcon {
                 let r: CGFloat = frame % 2 == 0 ? 1.5 : 1.0
                 NSBezierPath(ovalIn: NSRect(x: 8 - r, y: 10.6 - r, width: 2 * r, height: 2 * r)).fill()
             default:
-                let c = NSPoint(x: 8, y: 8)
-                NSBezierPath(ovalIn: NSRect(x: c.x - 2.7, y: c.y - 2.7, width: 5.4, height: 5.4)).fill()
-                for i in 0..<18 {
-                    let a = CGFloat(i) * .pi / 9 - .pi / 2
-                    let l = ringPattern[(i + frame * 3) % ringPattern.count]
-                    let r0: CGFloat = 4.4
-                    let bar = NSBezierPath()
-                    bar.move(to: NSPoint(x: c.x + r0 * cos(a), y: c.y + r0 * sin(a)))
-                    bar.line(to: NSPoint(x: c.x + (r0 + l) * cos(a), y: c.y + (r0 + l) * sin(a)))
-                    bar.lineWidth = 1.0
-                    bar.lineCapStyle = .round
-                    bar.stroke()
+                let slot = micSlot[frame % micSlot.count], top = 4 - slot / 2
+                for (y, row) in micRows.enumerated() {
+                    for (x, c) in row.enumerated() where c == "k" && !((7...8).contains(x) && (top..<top + slot).contains(y)) {
+                        NSRect(x: x, y: y, width: 1, height: 1).fill()
+                    }
                 }
             }
-            if dot { NSBezierPath(ovalIn: NSRect(x: 14.4, y: 0.4, width: 4.4, height: 4.4)).fill() }
+            if dot {
+                if style == "bars" || style == "pen" { NSBezierPath(ovalIn: NSRect(x: 14.4, y: 0.4, width: 4.4, height: 4.4)).fill() }
+                else { NSRect(x: 15, y: 0, width: 4, height: 4).fill() }   // square, to match the pixels
+            }
             return true
         }
         img.isTemplate = true

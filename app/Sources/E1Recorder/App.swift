@@ -9,6 +9,8 @@ struct E1RecorderApp: App {
     @StateObject private var recorder = MacRecorder.shared
 
     init() {
+        AppRename.quitOtherCopies()
+        AppRename.reRegisterLoginItem()
         Pipeline.shared.start()
         if UIPreview.enabled { DispatchQueue.main.asyncAfter(deadline: .now() + 1) { UIPreview.show() } }
     }
@@ -110,6 +112,11 @@ enum UIPreview {
 /// Audio files opened with the app (dragged onto its icon, or「打开方式」in Finder) are imported for transcription.
 final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationWillTerminate(_ notification: Notification) { Pipeline.flushWrites() }
+
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        // 等菜单栏图标出来再问，免得一启动就弹窗
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2) { AppRename.offerToTrashOldCopy() }
+    }
 
     func application(_ application: NSApplication, open urls: [URL]) {
         let audio = urls.filter { ["m4a", "mp3", "wav", "aac", "aiff", "aif", "caf", "flac", "mp4", "mov", "amr", "ogg", "opus", "wma"].contains($0.pathExtension.lowercased()) }

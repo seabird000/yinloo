@@ -33,7 +33,7 @@ final class SettingsNav: ObservableObject {
     @Published var request: SettingsSection?
     var requestSub: String?
 
-    /// Preferences › 转写 › 服务选项 (cloud services: transcription, WiFi storage, budget).
+    /// Preferences › 转写 › 服务选项 (transcription platform, its keys, budget).
     @MainActor static func openServiceOptions() {
         shared.requestSub = "platform-settings"
         shared.request = .platform
@@ -63,6 +63,7 @@ struct SettingsView: View {
     @State private var jumping = false
 
     private static let subTitles = ["platform-settings": "服务选项"]
+        .merging(DeviceKind.allCases.map { ($0.subpage, $0.name) }) { a, _ in a }
 
     var body: some View {
         NavigationSplitView {
@@ -135,6 +136,8 @@ struct SettingsView: View {
     @ViewBuilder private func subpage(_ id: String) -> some View {
         switch id {
         case "platform-settings": PlatformSettingsPage()
+        case DeviceKind.e1.subpage: E1DevicePage()
+        case DeviceKind.voiceMemos.subpage: VoiceMemosDevicePage()
         default: page(selection ?? .platform)
         }
     }

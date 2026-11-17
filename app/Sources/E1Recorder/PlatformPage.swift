@@ -255,7 +255,7 @@ struct UsageRow: View {
     let slices: [Pipeline.UsageSlice]
     let budget: Int
 
-    private static let colors: [String: Color] = ["录音笔": .e1Blue, "导入": .orange, "Mac 录音": .e1Green]
+    private static let colors: [String: Color] = ["录音笔": .e1Blue, "语音备忘录": .purple, "导入": .orange, "Mac 录音": .e1Green]
     private var yuan: Double { slices.reduce(0) { $0 + $1.yuan } }
     private var hours: Double { slices.reduce(0) { $0 + $1.hours } }
 

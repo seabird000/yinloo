@@ -70,6 +70,16 @@ final class Pipeline: ObservableObject {
     /// When this Mac last looked in the mailbox.
     @Published var lastWifiCheck: Date?
     var lastWifiSync = Date.distantPast
+    /// Voice Memos: the last look, sizes of recordings still settling, and what the folder looked like then.
+    @Published var memoScan: MemoScan?
+    /// Recordings Voice Memos lists (newest first, not counting 最近删除), for the device page.
+    @Published var memoList: [VoiceMemos.Memo] = []
+    /// Recordings being copied for a manual 转写 right now.
+    @Published var memoImporting: Set<String> = []
+    var memoSizes: [String: Int64] = [:]
+    var memoSignature: String?
+    var memoScanning = false
+    var lastMemoScan = Date.distantPast
 
     var wifiOnline: Bool { settings.wifiReady && (wifiStatus?.isOnline ?? false) }
     var settingsWifiReady: Bool { settings.wifiReady }
@@ -200,14 +210,15 @@ final class Pipeline: ObservableObject {
         let cal = Calendar.current
         var slices: [String: UsageSlice] = [:]
         for j in jobs where j.state == .done && cal.isDate(j.updated, equalTo: Date(), toGranularity: .month) {
-            let key = j.source.contains("录音笔") ? "录音笔" : j.source.contains("Mac") ? "Mac 录音" : "导入"
+            let key = j.source.contains("录音笔") ? "录音笔" : j.source.contains("语音备忘录") ? "语音备忘录"
+                : j.source.contains("Mac") ? "Mac 录音" : "导入"
             let h = Double(j.durationSec) / 3600
             var s = slices[key] ?? UsageSlice(id: key, hours: 0, yuan: 0)
             s.hours += h
             s.yuan += h * (Self.pricePerHour(Provider(rawValue: j.provider ?? "") ?? .tingwu) ?? 0)
             slices[key] = s
         }
-        return ["录音笔", "导入", "Mac 录音"].compactMap { slices[$0] }
+        return ["录音笔", "语音备忘录", "导入", "Mac 录音"].compactMap { slices[$0] }
     }
 
     /// The job that just finished, so the 存到本地 step can show done for a moment.
@@ -246,6 +257,10 @@ final class Pipeline: ObservableObject {
                 await refreshPen()
                 if settings.autoSync, penConnected, !wasConnected || Date().timeIntervalSince(lastFullSync) > 30 {
                     await syncPen()
+                }
+                // Voice Memos every 30 s, on its own task: copying a long recording mustn't hold up the pen.
+                if settings.voiceMemos, !memoScanning, Date().timeIntervalSince(lastMemoScan) >= 30 {
+                    Task { await scanVoiceMemos() }
                 }
             }
             processQueue()
@@ -348,7 +363,7 @@ final class Pipeline: ObservableObject {
             }
             if let free = p.freeBytes, free < 1_000_000_000, !warnedLowSpace {
                 warnedLowSpace = true
-                notify("录音笔空间不足", "只剩 \(formatBytes(free))。已转写的录音可以在笔上删除，见「偏好 › 设备 › 笔内录音」。", jobId: "")
+                notify("录音笔空间不足", "只剩 \(formatBytes(free))。已转写的录音可以在笔上删除，见「偏好 › 设备 › 搜狗 E1 录音笔 › 笔内录音」。", jobId: "")
             }
             penClock = ["synced": "时间已联网校准", "rtc_ok": "时间正常", "estimated": "时间为估计值（未联网）"][p.clockStatus] ?? ""
         } else {
@@ -387,6 +402,26 @@ final class Pipeline: ObservableObject {
             let json = #"{"sn":"E1PREVIEW0123456","version":"1.0.0","time":"\#(ISO8601DateFormatter().string(from: Date().addingTimeInterval(-180)))","battery":86,"charging":false,"freeBytes":29045000000,"ssid":"Office-WiFi","clockStatus":"synced","recordings":[]}"#
             wifiStatus = try? JSONDecoder().decode(WifiStatus.self, from: Data(json.utf8))
         }
+        if memoScan == nil {
+            // Screenshot aid: -previewMemo noAccess|notFound|settling shows that state of the Voice Memos section.
+            var m = MemoScan(at: Date(), total: 6, before: 5)
+            switch UserDefaults.standard.string(forKey: "previewMemo") {
+            case "noAccess": m.problem = .noAccess
+            case "notFound": m.problem = .notFound
+            case "settling": m.settling = 1
+            default: break
+            }
+            memoScan = m
+            let base = Calendar.current.date(bySettingHour: 13, minute: 33, second: 0, of: Date())!
+            memoList = [("午饭后的想法", 0.0, 28), ("产品评审会", 1, 2650), ("给客户的回电要点", 3, 312), ("周会", 4, 3120), ("新录音 2", 4.2, 4)]
+                .enumerated().map { i, r in
+                    VoiceMemos.Memo(file: "preview-\(i).m4a", title: r.0, created: base.addingTimeInterval(-r.1 * 86400), durationSec: r.2, deleted: false)
+                }
+            if !jobs.contains(where: { $0.id == "vm:preview-0.m4a" }) {
+                jobs.append(Job(id: "vm:preview-0.m4a", title: "午饭后的想法", scene: "会议", source: "语音备忘录", created: base, durationSec: 28,
+                                marks: [], audioPath: "/tmp/preview-0.m4a", listenPath: nil, timeUncertain: false, state: .done, updated: Date()))
+            }
+        }
         penRecordingCount = 4
         if penRecordings.isEmpty {
             let base = Calendar.current.date(bySettingHour: 9, minute: 30, second: 0, of: Date())!
@@ -398,20 +433,22 @@ final class Pipeline: ObservableObject {
         if lastSync == nil { lastSync = Calendar.current.date(bySettingHour: 12, minute: 58, second: 0, of: Date()) }
     }
 
-    /// 立即同步 in the panel or the device page: copies from the pen over USB if it's plugged in,
-    /// and fetches whatever the pen has uploaded to the WiFi mailbox — both, every time.
-    func syncNow() async {
+    /// 立即同步 in the panel or a device page: copies from the pen over USB if it's plugged in, fetches whatever the
+    /// pen has uploaded to the WiFi mailbox, and looks in Voice Memos — every device, or just `only`.
+    func syncNow(only: DeviceKind? = nil) async {
         guard !manualSync else { return }
         manualSync = true
         syncResult = nil
         let before = jobs.count
         let t0 = Date()
+        let pen = only == nil || only == .e1, memos = only == nil || only == .voiceMemos
         if UIPreview.enabled {
-            syncPhase = "检查录音笔"; try? await Task.sleep(nanoseconds: 700_000_000)
-            syncPhase = "检查云端"; try? await Task.sleep(nanoseconds: 700_000_000)
+            if pen { syncPhase = "检查录音笔"; try? await Task.sleep(nanoseconds: 700_000_000) }
+            if memos { syncPhase = "检查语音备忘录"; try? await Task.sleep(nanoseconds: 700_000_000) }
         } else {
-            if penConnected { syncPhase = "检查录音笔"; await syncPen() }
-            if settings.wifiReady { syncPhase = "检查云端"; await syncWifi(force: true) }
+            if pen, penConnected { syncPhase = "检查录音笔"; await syncPen() }
+            if pen, settings.wifiReady { syncPhase = "检查云端"; await syncWifi(force: true) }
+            if memos, settings.voiceMemos || only == .voiceMemos { syncPhase = "检查语音备忘录"; await scanVoiceMemos(force: true) }
         }
         // Keep the progress visible long enough to read, then say what happened.
         let spent = Date().timeIntervalSince(t0)
@@ -483,7 +520,8 @@ final class Pipeline: ObservableObject {
     /// "USB" or "WiFi" while files are being copied or fetched.
     @Published var copySource = "USB"
 
-    var canSyncNow: Bool { penConnected || settings.wifiReady }
+    var canSyncNow: Bool { penConnected || settings.wifiReady || settings.voiceMemos }
+    func canSync(_ d: DeviceKind) -> Bool { d == .e1 ? penConnected || settings.wifiReady : true }
 
     // MARK: persistence
 

@@ -45,7 +45,7 @@ extension Pipeline {
                 if !hasJob(sn: sn, wavPath: m.wavPath), m.durationSec > 0, m.durationSec >= settings.minDurationSec {
                     let created = m.created.flatMap { ISO8601DateFormatter().date(from: $0) } ?? Date()
                     let folder = URL(fileURLWithPath: settings.audioFolder)
-                        .appendingPathComponent(DateFormatter.cached("yyyy-MM").string(from: created), isDirectory: true)
+                        .appendingPathComponent("\(DeviceKind.e1.folderName)/" + DateFormatter.cached("yyyy-MM").string(from: created), isDirectory: true)
                     let wav = folder.appendingPathComponent(name)
                     let mp3 = folder.appendingPathComponent((name as NSString).deletingPathExtension + "_denoise.mp3")
                     penStatus = "正在下载：\(m.title)"
@@ -137,7 +137,7 @@ extension Pipeline {
         let tag = AppLinks.version + "/" + Bundled.uploaderVersion
         if c.anyOutdated, UserDefaults.standard.string(forKey: "componentsUpdateNoticeFor") != tag {
             UserDefaults.standard.set(tag, forKey: "componentsUpdateNoticeFor")
-            notify("录音笔上的程序可以更新", "在「偏好 › 设备 › 录音笔上的程序」里一键更新。", jobId: "")
+            notify("录音笔上的程序可以更新", "在「偏好 › 设备 › 搜狗 E1 录音笔 › 录音笔上的程序」里一键更新。", jobId: "")
         }
     }
 

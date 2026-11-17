@@ -56,7 +56,7 @@ extension Pipeline {
                 copyDone = added
                 let created = r.created ?? Date()
                 let month = DateFormatter.cached("yyyy-MM").string(from: created)
-                let dir = URL(fileURLWithPath: settings.audioFolder).appendingPathComponent(month, isDirectory: true)
+                let dir = URL(fileURLWithPath: settings.audioFolder).appendingPathComponent("\(DeviceKind.e1.folderName)/\(month)", isDirectory: true)
                 let wav = dir.appendingPathComponent((r.wavPath as NSString).lastPathComponent)
                 let mp3 = dir.appendingPathComponent((r.mp3Path as NSString).lastPathComponent)
                 penStatus = "正在拷贝：\(r.title)"

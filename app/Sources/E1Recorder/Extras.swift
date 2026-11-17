@@ -80,7 +80,7 @@ struct WelcomeView: View {
     @State private var editingAppId = false
     @State private var page = ["pen": 0, "platform": 1, "wifi": 2][UserDefaults.standard.string(forKey: "previewPage") ?? ""] ?? 0
 
-    private let titles = ["欢迎使用 E1录音助手", "转写与纪要", "WiFi 无线同步（可选）"]
+    private let titles = ["欢迎使用音录", "转写与纪要", "WiFi 无线同步（可选）"]
     private let subtitles = [
         "先让这台 Mac 认出录音笔，并在笔上装好校时脚本。之后插上录音笔就会自动拷贝录音。",
         "录音在云端转写，生成的会议纪要存进你的笔记库。",
@@ -157,7 +157,7 @@ struct WelcomeView: View {
                 StepHeader(number: 2, title: "在录音笔上安装校时脚本", done: pipeline.penComponents?.clock == .current,
                            status: !pipeline.penConnected ? "先完成第 1 步" : pipeline.penComponents?.clock == .current ? "已安装" : "建议安装")
             } footer: {
-                Text("搜狗的对时服务器已关闭，录音笔断电后时间会乱，录音和纪要上的时间就不准。WiFi 上传程序是可选的，在第 3 页设置。这些程序以后都在「偏好 › 设备 › 录音笔上的程序」里查看和更新。")
+                Text("搜狗的对时服务器已关闭，录音笔断电后时间会乱，录音和纪要上的时间就不准。WiFi 上传程序是可选的，在第 3 页设置。这些程序以后都在「偏好 › 设备 › 搜狗 E1 录音笔」里查看和更新。")
                     .foregroundStyle(.secondary).frame(maxWidth: .infinity, alignment: .leading).multilineTextAlignment(.leading)
             }
 
@@ -328,7 +328,7 @@ struct UpdateBanner: View {
                 Image(systemName: "arrow.down.circle.fill").foregroundStyle(Color.e1Blue)
                 Text("有新版本 \(v)").font(.e1Body)
                 Spacer()
-                Button("下载") { NSWorkspace.shared.open(AppLinks.releases) }.buttonStyle(.e1Link)
+                Button("下载") { NSWorkspace.shared.open(AppLinks.download) }.buttonStyle(.e1Link)
                 Button { pipeline.dismissUpdate() } label: { Image(systemName: "xmark").font(.system(size: 9, weight: .bold)) }
                     .buttonStyle(IconButtonStyle()).help("不再提示这个版本")
             }

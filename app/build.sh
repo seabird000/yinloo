@@ -1,9 +1,11 @@
 #!/bin/bash
-# Builds E1录音助手.app (universal: Apple silicon + Intel) and a drag-to-install .dmg.
+# Builds 音录.app (universal: Apple silicon + Intel) and a drag-to-install .dmg.
+# 1.4.0 起应用改名「音录」（原名「E1录音助手」）；bundle id、设置域、钥匙串条目都不变。
 set -euo pipefail
 cd "$(dirname "$0")"
-VERSION="${VERSION:-1.3.2}"
-NAME="E1录音助手"
+VERSION="${VERSION:-1.4.0}"
+NAME="音录"
+DMG="build/Yinloo-$VERSION.dmg"
 APP="build/$NAME.app"
 
 # PREVIEW=1 ./build.sh makes a build whose screenshot mode (-uiPreview YES …) works; release builds leave it out.
@@ -65,7 +67,7 @@ PLIST
 
 # Declare Chinese so system panels (Finder open/save dialogs, menus) appear in Chinese
 mkdir -p "$APP/Contents/Resources/zh-Hans.lproj"
-printf '"CFBundleDisplayName" = "E1录音助手";\n"CFBundleName" = "E1录音助手";\n' > "$APP/Contents/Resources/zh-Hans.lproj/InfoPlist.strings"
+printf '"CFBundleDisplayName" = "%s";\n"CFBundleName" = "%s";\n' "$NAME" "$NAME" > "$APP/Contents/Resources/zh-Hans.lproj/InfoPlist.strings"
 
 # Signing: with a local self-signed "E1Recorder Local Signing" certificate (made once in Keychain Access ›
 # Certificate Assistant › Create a Certificate…, type "Code Signing") every build keeps the same identity, so macOS
@@ -85,9 +87,11 @@ mkdir -p "$STAGE"
 cp -R "$APP" "$STAGE/"
 ln -s /Applications "$STAGE/应用程序"
 cat > "$STAGE/安装说明.txt" <<'TXT'
-E1录音助手 安装说明
+音录 安装说明（官网 https://yinloo.com）
 
-1. 把「E1录音助手」拖到「应用程序」文件夹。
+1. 把「音录」拖到「应用程序」文件夹。
+   从旧版「E1录音助手」升级：先点菜单栏图标退出旧版，再拖入新版；新版第一次打开会问要不要把旧版移到废纸篓。
+   设置、转写记录和密钥都会沿用。
 2. 第一次打开会被 macOS 拦住（本应用未经 Apple 公证）：在提示里点「完成」，
    然后打开「系统设置 › 隐私与安全性」，在「安全性」一栏点「仍要打开」，输入登录密码确认。
    只需要这一次。图文步骤：https://yinloo.com/install
@@ -97,9 +101,9 @@ E1录音助手 安装说明
 5. 每次升级后第一次启动，macOS 会询问能否读取钥匙串里的密钥，点「始终允许」。
 6. 换电脑：菜单栏图标 →「偏好…」→ 通用 → 导出配置，在新电脑上导入后重新填密钥（密钥不随配置导出）。
 
-项目主页与问题反馈：https://github.com/seabird000/E1Recorder
+源代码与问题反馈：https://github.com/seabird000/yinloo
 TXT
-hdiutil create -volname "$NAME" -srcfolder "$STAGE" -ov -format UDZO "build/E1Recorder-$VERSION.dmg" >/dev/null
+hdiutil create -volname "$NAME" -srcfolder "$STAGE" -ov -format UDZO "$DMG" >/dev/null
 rm -rf "$STAGE"
 echo "built: $APP"
-echo "built: build/E1Recorder-$VERSION.dmg"
+echo "built: $DMG"
