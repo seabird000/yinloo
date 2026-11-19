@@ -80,6 +80,14 @@ final class Pipeline: ObservableObject {
     var memoSignature: String?
     var memoScanning = false
     var lastMemoScan = Date.distantPast
+    /// 搜狗 C1 Max（U 盘）：插着没有、挂在哪里（只读），笔里的录音，正在拷的。
+    @Published var c1 = C1Status()
+    @Published var c1List: [C1Max.Recording] = []
+    @Published var c1Importing: Set<String> = []
+    @Published var c1Syncing = false
+    @Published var c1CopyDone = 0
+    @Published var c1CopyTotal = 0
+    @Published var c1LastSync: Date?
 
     var wifiOnline: Bool { settings.wifiReady && (wifiStatus?.isOnline ?? false) }
     var settingsWifiReady: Bool { settings.wifiReady }
@@ -102,8 +110,14 @@ final class Pipeline: ObservableObject {
         case transcribing(since: Date)
         case writing
         case waiting(until: Date)        // network trouble or busy server: tries again by itself
+        case local(Double?)              // 本机转写中（进度 0～1）
     }
     @Published var phases: [String: JobPhase] = [:]
+
+    func setLocalProgress(_ id: String, _ f: Double) {
+        if case .local(let old)? = phases[id], let old, f < 1, f - old < 0.01 { return }
+        phases[id] = .local(min(1, f))
+    }
 
     func setUploadProgress(_ id: String, _ f: Double) {
         if case .uploading(let old)? = phases[id], let old, f < 1, f - old < 0.01 { return }
@@ -140,13 +154,14 @@ final class Pipeline: ObservableObject {
         URLCache.shared = URLCache(memoryCapacity: 0, diskCapacity: 0)
         load()
         UNUserNotificationCenter.current().delegate = NotificationRouter.shared
-        UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { _, _ in }
+        if !UIPreview.enabled { UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { _, _ in } }
         Task { await loop() }
         Task { await wifiLoop() }
+        if !UIPreview.enabled { C1MaxDisk.shared.start() }
         Task { await animateIcon() }
         Task { await weeklyUpdateCheck() }
         // Check the mailbox right away on launch and whenever the Mac wakes up.
-        Task { await syncWifi(force: true); await checkCloud(force: true) }
+        Task { await settings.refreshLocalEngine(); await syncWifi(force: true); await checkCloud(force: true) }
         NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.didWakeNotification, object: nil, queue: .main) { _ in
             Task { @MainActor in
                 try? await Task.sleep(nanoseconds: 5_000_000_000)   // give the network a moment
@@ -163,22 +178,13 @@ final class Pipeline: ObservableObject {
         while true {
             let last = d.object(forKey: "lastUpdateCheck") as? Date ?? .distantPast
             if Date().timeIntervalSince(last) > 7 * 86400, !UIPreview.enabled {
-                if let v = await Self.latestRelease() {
+                if let v = await UpdateCheck.latest() {
                     d.set(Date(), forKey: "lastUpdateCheck")
-                    updateVersion = v.compare(AppLinks.version, options: .numeric) == .orderedDescending ? v : nil
+                    updateVersion = UpdateCheck.isNewer(v) ? v : nil
                 }
             }
             try? await Task.sleep(nanoseconds: 6 * 3600 * 1_000_000_000)
         }
-    }
-
-    /// Latest release tag on GitHub, without the leading "v"; nil when offline or no release yet.
-    static func latestRelease() async -> String? {
-        var r = URLRequest(url: AppLinks.latestAPI, timeoutInterval: 15)
-        r.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
-        guard let (data, resp) = try? await URLSession.shared.data(for: r), (resp as? HTTPURLResponse)?.statusCode == 200,
-              let tag = (try? JSONSerialization.jsonObject(with: data) as? [String: Any])?["tag_name"] as? String else { return nil }
-        return tag.trimmingCharacters(in: CharacterSet(charactersIn: "vV"))
     }
 
     func dismissUpdate() {
@@ -199,6 +205,7 @@ final class Pipeline: ObservableObject {
         case .tingwu: 0.6 + 3 * 0.064   // transcription + summary, chapters, to-dos
         case .bailian: 0.79 + 0.02      // Fun-ASR + a Qwen summary
         case .custom: nil
+        case .local: 0                  // 本机转写不花钱；整理纪要的大模型每小时约 0.02 元，忽略
         }
     }
 
@@ -387,15 +394,17 @@ final class Pipeline: ObservableObject {
             jobs = Demo.jobs()
             if let t = jobs.first(where: { $0.state == .transcribing }) { phases[t.id] = .transcribing(since: Date().addingTimeInterval(-102)) }
         }
-        // Screenshot aid: -previewPhase upload|transcribe|write shows a job at that step (in memory only).
+        // Screenshot aid: -previewPhase upload|local|transcribe|write shows a job at that step (in memory only).
         if UserDefaults.standard.string(forKey: "previewPhase") == "done" {
             if lastCompleted == nil || Date().timeIntervalSince(lastCompleted!.at) > 8 { lastCompleted = ("preview-job", 2710, Date()) }
         } else if let ph = UserDefaults.standard.string(forKey: "previewPhase"), !jobs.contains(where: { $0.id == "preview-job" }) {
             jobs.insert(Job(id: "preview-job", title: "周会：录音项目进度", scene: "会议", source: "搜狗 E1 录音笔", created: Date().addingTimeInterval(-3000),
                             durationSec: 2710, marks: [], audioPath: "/tmp/preview.wav", listenPath: nil, timeUncertain: false,
                             state: ph == "upload" || ph == "queued" ? .queued : .transcribing, updated: Date()), at: 0)
+            if ph == "local" { jobs[0].provider = Provider.local.rawValue; jobs[0].state = .queued }
             if ph != "queued" {
-                phases["preview-job"] = ph == "upload" ? .uploading(0.62) : ph == "write" ? .writing : .transcribing(since: Date().addingTimeInterval(-95))
+                phases["preview-job"] = ph == "upload" ? .uploading(0.62) : ph == "local" ? .local(0.37) : ph == "write" ? .writing
+                    : .transcribing(since: Date().addingTimeInterval(-95))
             }
         }
         if wifiStatus == nil {
@@ -422,6 +431,7 @@ final class Pipeline: ObservableObject {
                                 marks: [], audioPath: "/tmp/preview-0.m4a", listenPath: nil, timeUncertain: false, state: .done, updated: Date()))
             }
         }
+        previewC1()
         penRecordingCount = 4
         if penRecordings.isEmpty {
             let base = Calendar.current.date(bySettingHour: 9, minute: 30, second: 0, of: Date())!
@@ -441,13 +451,15 @@ final class Pipeline: ObservableObject {
         syncResult = nil
         let before = jobs.count
         let t0 = Date()
-        let pen = only == nil || only == .e1, memos = only == nil || only == .voiceMemos
+        let pen = only == nil || only == .e1, memos = only == nil || only == .voiceMemos, c1Max = only == nil || only == .c1Max
         if UIPreview.enabled {
             if pen { syncPhase = "检查录音笔"; try? await Task.sleep(nanoseconds: 700_000_000) }
+            if c1Max, c1.volume != nil { syncPhase = "检查 C1 Max"; try? await Task.sleep(nanoseconds: 700_000_000) }
             if memos { syncPhase = "检查语音备忘录"; try? await Task.sleep(nanoseconds: 700_000_000) }
         } else {
             if pen, penConnected { syncPhase = "检查录音笔"; await syncPen() }
             if pen, settings.wifiReady { syncPhase = "检查云端"; await syncWifi(force: true) }
+            if c1Max, c1.volume != nil { syncPhase = "检查 C1 Max"; await syncC1Max(manual: only == .c1Max) }
             if memos, settings.voiceMemos || only == .voiceMemos { syncPhase = "检查语音备忘录"; await scanVoiceMemos(force: true) }
         }
         // Keep the progress visible long enough to read, then say what happened.
@@ -484,11 +496,17 @@ final class Pipeline: ObservableObject {
         do {
             try await Self.service(settings.provider, settings: settings, key: key).testConnection()
             parts.append("\(settings.provider.info.name)正常")
-            settings.connState = "ok"
+            if let a = settings.asrAccount { settings.connStates[a.rawValue] = "ok" }
         } catch {
             ok = false
             parts.append("\(settings.provider.info.name)：\(error.localizedDescription)")
         }
+        // ② 整理用的是另一家时也测一下（整理不了不影响转写，只是纪要里只有逐字稿）
+        if let a = settings.noteAccount, a != settings.asrAccount, let w = Self.noteWriter(settings, asr: settings.provider) {
+            do { try await w.test(); parts.append("\(settings.noteService.shortName)正常"); settings.connStates[a.rawValue] = "ok" }
+            catch { ok = false; parts.append("\(settings.noteService.shortName)：\(error.localizedDescription)") }
+        }
+        if ok { settings.connState = "ok" }
         if settings.wifiReady, let oss = settings.macOSS() {
             do { _ = try await oss.list(prefix: "pen/"); parts.append("WiFi 信箱正常") }
             catch { ok = false; parts.append("WiFi 信箱：\(error.localizedDescription)") }
@@ -520,8 +538,14 @@ final class Pipeline: ObservableObject {
     /// "USB" or "WiFi" while files are being copied or fetched.
     @Published var copySource = "USB"
 
-    var canSyncNow: Bool { penConnected || settings.wifiReady || settings.voiceMemos }
-    func canSync(_ d: DeviceKind) -> Bool { d == .e1 ? penConnected || settings.wifiReady : true }
+    var canSyncNow: Bool { penConnected || settings.wifiReady || settings.voiceMemos || c1.volume != nil }
+    func canSync(_ d: DeviceKind) -> Bool {
+        switch d {
+        case .e1: penConnected || settings.wifiReady
+        case .c1Max: c1.volume != nil && !c1Syncing
+        case .voiceMemos: true
+        }
+    }
 
     // MARK: persistence
 
@@ -533,7 +557,8 @@ final class Pipeline: ObservableObject {
     }
 
     func load() {
-        guard let d = try? Data(contentsOf: storeURL) else { return }
+        // 截图用假数据时不读真实的转写记录（反正会整个换成 Demo.jobs()）
+        guard !Demo.on, let d = try? Data(contentsOf: storeURL) else { return }
         let dec = JSONDecoder(); dec.dateDecodingStrategy = .iso8601
         jobs = (try? dec.decode([Job].self, from: d)) ?? []
         // Older jobs: take the meeting topic from the cached transcript.
@@ -577,10 +602,11 @@ final class Pipeline: ObservableObject {
         let dir = resultsDir(dataId)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         let items: [(String, Any)] = [("transcription", b.transcription), ("summarization", b.summarization),
-                                      ("chapters", b.chapters), ("assistance", b.assistance)]
+                                      ("chapters", b.chapters), ("assistance", b.assistance), ("notices", b.notices)]
         for (n, o) in items {
             try? JSONSerialization.data(withJSONObject: o, options: [.prettyPrinted]).write(to: dir.appendingPathComponent(n + ".json"))
         }
+        try? b.transcript?.write(to: dir.appendingPathComponent("transcript.json"))
     }
 
     func loadResults(_ dataId: String) -> TranscriptBundle? {
@@ -588,7 +614,9 @@ final class Pipeline: ObservableObject {
         func j(_ n: String) -> Any? { (try? Data(contentsOf: dir.appendingPathComponent(n + ".json"))).flatMap { try? JSONSerialization.jsonObject(with: $0) } }
         guard let t = j("transcription") as? [String: Any] else { return nil }
         return TranscriptBundle(transcription: t, summarization: j("summarization") as? [String: Any] ?? [:],
-                                chapters: j("chapters") as? [[String: Any]] ?? [], assistance: j("assistance") as? [String: Any] ?? [:])
+                                chapters: j("chapters") as? [[String: Any]] ?? [], assistance: j("assistance") as? [String: Any] ?? [:],
+                                notices: j("notices") as? [String] ?? [],
+                                transcript: try? Transcript.read(from: dir.appendingPathComponent("transcript.json")))
     }
 
     /// Clicking the notification opens the note (or, for a failure, explains it and offers a retry).

@@ -10,6 +10,8 @@
 !/docs/
 
 /app/.build/
+# sherpa-onnx 动态库：build.sh 从官方发布页下载并核对校验码
+/app/.vendor/
 /app/build/
 /app/screenshots/
 /app/*.md

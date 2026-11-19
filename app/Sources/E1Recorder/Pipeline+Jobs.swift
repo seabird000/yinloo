@@ -45,7 +45,7 @@ extension Pipeline {
         // If the cloud task itself is fine (the failure was on this Mac: network, note folder…), pick it up again
         // instead of uploading and paying for a second transcription.
         let why = job.error ?? ""
-        let reuse = job.dataId != nil && !why.hasPrefix("云端转写失败") && !why.hasPrefix("转写超时")
+        let reuse = job.dataId != nil && !why.hasPrefix("云端转写失败") && !why.hasPrefix("本机转写失败") && !why.hasPrefix("转写超时")
         retryAt[job.id] = nil
         update(job.id) { $0.state = reuse ? .transcribing : .queued; if !reuse { $0.dataId = nil }; $0.error = nil }
         processQueue()

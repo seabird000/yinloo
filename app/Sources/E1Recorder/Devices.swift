@@ -5,22 +5,31 @@ import SwiftUI
 /// (name, icon, one status line, sync, settings page); each device's own sync code stays where it is.
 enum DeviceKind: String, CaseIterable, Identifiable {
     case e1
+    case c1Max
     case voiceMemos
     var id: String { rawValue }
 
     var name: String {
         switch self {
         case .e1: "搜狗 E1 录音笔"
+        case .c1Max: "搜狗 C1 Max"
         case .voiceMemos: "语音备忘录"
         }
     }
     /// Preferences sub-page with this device's settings.
     var subpage: String { "device-" + rawValue }
-    var glyph: SidebarIcon.Glyph { self == .e1 ? .device : .voiceMemos }
+    var glyph: SidebarIcon.Glyph {
+        switch self {
+        case .e1: .device
+        case .c1Max: .c1Max
+        case .voiceMemos: .voiceMemos
+        }
+    }
     /// Folder (inside the audio folder) that this device's new recordings are copied into, by month.
     var folderName: String {
         switch self {
         case .e1: "搜狗E1"
+        case .c1Max: "搜狗C1Max"
         case .voiceMemos: "语音备忘录"
         }
     }
@@ -52,92 +61,76 @@ extension DeviceStatus.Level {
 }
 
 extension Pipeline {
-    /// Devices in the menu bar panel: the pen always, the others once they're switched on.
-    var panelDevices: [DeviceKind] { DeviceKind.allCases.filter { $0 == .e1 || isEnabled($0) } }
+    /// Devices in the menu bar panel: the E1 always, C1 Max once it has been plugged in, Voice Memos once switched on.
+    var panelDevices: [DeviceKind] {
+        DeviceKind.allCases.filter {
+            switch $0 {
+            case .e1: true
+            case .c1Max: c1EverSeen || c1.phase != .absent
+            case .voiceMemos: settings.voiceMemos
+            }
+        }
+    }
 
     func isEnabled(_ d: DeviceKind) -> Bool {
         switch d {
-        case .e1: true
+        case .e1, .c1Max: true
         case .voiceMemos: settings.voiceMemos
         }
     }
 
     /// The latest time any device was synced or looked at (for 「立即同步 · 上次 …」).
     var lastAnySync: Date? {
-        [lastSync, lastWifiCheck, settings.voiceMemos ? memoScan?.at : nil].compactMap { $0 }.max()
+        [lastSync, lastWifiCheck, c1LastSync, settings.voiceMemos ? memoScan?.at : nil].compactMap { $0 }.max()
     }
 
     func deviceStatus(_ d: DeviceKind) -> DeviceStatus {
         switch d {
         case .e1: e1Status
+        case .c1Max: c1Status
         case .voiceMemos: voiceMemoStatus
         }
     }
 
-    private var e1Status: DeviceStatus {
-        let clock = DateFormatter.cached("HH:mm")
-        let snap = penSnapshot
-        let battery = snap?.battery.map { "电量 \($0)%" + ((snap?.charging ?? false) ? "（充电中）" : "") }
-        let last = lastSync.map { "上次同步 " + clock.string(from: $0) }
-        var details: [String] = []
-        if penConnected {
-            details.append("USB 已连接" + (penClock.isEmpty ? "" : " · " + penClock))
-        }
-        if settings.wifiReady {
-            if let w = wifiStatus, let seen = w.seen {
-                details.append(w.isOnline ? "WiFi 在线 · 心跳 \(relativeTime(seen))" : "WiFi 最后在线 \(relativeTime(seen))")
-            } else {
-                details.append("WiFi 还没收到心跳")
-            }
-        } else if !penConnected {
-            details.append("插上数据线即自动同步，也可设置 WiFi 同步")
-        }
-        let counts = [battery, snap?.freeBytes.map { "可用 " + formatBytes($0) }].compactMap { $0 }
-        if !counts.isEmpty { details.append(counts.joined(separator: " · ")) }
-        let tail = [last, snap?.recordingCount.map { "笔内 \($0) 条" }].compactMap { $0 }
-        if !tail.isEmpty { details.append(tail.joined(separator: " · ")) }
+    /// 每台设备都用同样的两行：第一行连接状态，第二行数量和上次同步；有问题才多一行。设备列表里把两行连成一行。
+    static func status(_ tag: String, _ level: DeviceStatus.Level, _ first: String, _ second: String? = nil,
+                       warning: String? = nil, short: String = "") -> DeviceStatus {
+        let lines = [first, second, warning].compactMap { $0?.isEmpty == false ? $0 : nil }
+        return DeviceStatus(tag: tag, level: level, line: lines.prefix(2).joined(separator: " · "), details: lines, short: short)
+    }
 
+    /// 「笔内 4 条 · 上次同步 12:58」
+    static func countAndSync(_ count: Int?, _ last: Date?, verb: String = "上次同步") -> String {
+        [count.map { "笔内 \($0) 条" }, last.map { verb + " " + DateFormatter.cached("HH:mm").string(from: $0) }]
+            .compactMap { $0 }.joined(separator: " · ")
+    }
+
+    private var e1Status: DeviceStatus {
+        let info = Self.countAndSync(penSnapshot?.recordingCount, lastSync)
         if isCopying {
             let what = (copySource == "WiFi" ? "正在取回" : "正在拷贝") + " \(min(copyDone + 1, copyTotal)) / \(copyTotal)"
-            return DeviceStatus(tag: penConnected ? "已连接" : "在线", level: .ok, line: what, details: details)
+            return Self.status(penConnected ? "已连接" : "在线", .ok, penConnected ? "USB 已连接" : "WiFi 在线", what)
         }
-        if penConnected {
-            return DeviceStatus(tag: "已连接", level: .ok, line: (["USB 已连接", battery, last].compactMap { $0 }).joined(separator: " · "), details: details)
-        }
-        if wifiOnline, let seen = wifiStatus?.seen {
-            return DeviceStatus(tag: "在线", level: .ok, line: (["WiFi 在线", battery, "心跳 " + relativeTime(seen)].compactMap { $0 }).joined(separator: " · "), details: details)
-        }
-        if settings.wifiReady, let e = wifiError {
-            return DeviceStatus(tag: "出错", level: .problem, line: e, details: details)
-        }
+        if penConnected { return Self.status("已连接", .ok, wifiOnline ? "USB 已连接 · WiFi 在线" : "USB 已连接", info) }
+        if wifiOnline { return Self.status("在线", .ok, "WiFi 在线", info) }
+        if settings.wifiReady, let e = wifiError { return Self.status("出错", .problem, "WiFi 同步出错", e) }
         if settings.wifiReady, let seen = wifiStatus?.seen {
-            return DeviceStatus(tag: "离线", level: .idle, line: "WiFi 最后在线 \(relativeTime(seen))" + (last.map { " · " + $0 } ?? ""), details: details)
+            return Self.status("离线", .idle, "WiFi 最后在线 " + relativeTime(seen), info)
         }
-        return DeviceStatus(tag: "未连接", level: .idle, line: "插上数据线即自动同步" + (last.map { " · " + $0 } ?? ""), details: details)
+        return Self.status("未连接", .idle, "未连接", "插上数据线即自动同步")
     }
 
     private var voiceMemoStatus: DeviceStatus {
-        guard settings.voiceMemos else {
-            return DeviceStatus(tag: "未开启", level: .idle, line: "打开后，iPhone 和这台 Mac 上的新录音自动转写", details: [])
-        }
-        guard let scan = memoScan else {
-            return DeviceStatus(tag: "检查中", level: .waiting, line: "正在查找语音备忘录…", details: [])
-        }
-        let since = settings.voiceMemosSince.map { "只转写 " + DateFormatter.cached("M月d日 HH:mm").string(from: $0) + " 以后录的" } ?? "只转写从现在起录的"
-        let checked = "上次检查 " + DateFormatter.cached("HH:mm").string(from: scan.at)
+        guard settings.voiceMemos else { return Self.status("未开启", .idle, "未开启", "打开后自动转写新录音") }
+        guard let scan = memoScan else { return Self.status("检查中", .waiting, "新录音自动转写", "正在查找语音备忘录…") }
         switch scan.problem {
-        case .noAccess?:
-            return DeviceStatus(tag: "需要授权", level: .problem, line: "需要在「完全磁盘访问权限」里打开本应用", details: ["需要在「完全磁盘访问权限」里打开本应用"])
-        case .notFound?:
-            return DeviceStatus(tag: "没有录音", level: .idle, line: "这台 Mac 上还没有语音备忘录", details: ["这台 Mac 上还没有语音备忘录", "iPhone 的录音要在 iCloud 里打开语音备忘录同步"])
-        case .audioFolder?:
-            return DeviceStatus(tag: "等待中", level: .waiting, line: "录音目录现在用不了，接上移动硬盘后自动继续", details: ["录音目录现在用不了（移动硬盘没接？）", checked])
-        case .failed(let why)?:
-            return DeviceStatus(tag: "出错", level: .problem, line: why, details: [why])
+        case .noAccess?: return Self.status("需要授权", .problem, "需要授权", "在「完全磁盘访问权限」里打开音录")
+        case .notFound?: return Self.status("没有录音", .idle, "新录音自动转写", "这台 Mac 上还没有语音备忘录")
+        case .audioFolder?: return Self.status("等待中", .waiting, "新录音自动转写", "录音目录用不了，接上移动硬盘后继续")
+        case .failed(let why)?: return Self.status("出错", .problem, "出错", why)
         case nil:
-            var details = [since]
-            if scan.settling > 0 { details.append("\(scan.settling) 条正在录音或同步，好了就转写") }
-            return DeviceStatus(tag: "已开启", level: .ok, line: checked + " · " + since, details: details, short: "已开启 · " + checked)
+            let info = (scan.settling > 0 ? "\(scan.settling) 条正在同步 · " : "") + Self.countAndSync(nil, scan.at, verb: "上次检查")
+            return Self.status("已开启", .ok, "新录音自动转写", info)
         }
     }
 
@@ -159,10 +152,14 @@ struct PanelDeviceGlyph: View {
     let active: Bool
     var body: some View {
         ZStack {
-            Circle().fill(active ? (kind == .voiceMemos ? Color(red: 0.93, green: 0.25, blue: 0.24) : Color.e1Blue) : Color.primary.opacity(0.08))
+            Circle().fill(active ? (kind == .voiceMemos ? Color(red: 0.93, green: 0.25, blue: 0.24) : kind == .c1Max ? Color.indigo : Color.e1Blue)
+                          : Color.primary.opacity(0.08))
             switch kind {
             case .e1:
                 PenGlyph(body_: active ? .white : Color.primary.opacity(0.3), detail: active ? .e1Blue : Color.dyn(0xDCDCDE, 0x4A4A4C))
+                    .frame(width: 16, height: 16)
+            case .c1Max:
+                C1Glyph(body_: active ? .white : Color.primary.opacity(0.3), detail: active ? .indigo : Color.dyn(0xDCDCDE, 0x4A4A4C))
                     .frame(width: 16, height: 16)
             case .voiceMemos:
                 Image(systemName: "waveform").font(.system(size: 11, weight: .semibold))

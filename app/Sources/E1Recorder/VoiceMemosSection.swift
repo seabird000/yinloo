@@ -24,8 +24,9 @@ struct VoiceMemosDevicePage: View {
     }
 }
 
-/// The switch, and what the last look found.
+/// The switch, and what the last look found. 引导「设备」页也用（标题换成「语音备忘录」）。
 struct VoiceMemosSection: View {
+    var title = "自动转写"
     @EnvironmentObject var s: AppSettings
     @EnvironmentObject var pipeline: Pipeline
 
@@ -54,7 +55,7 @@ struct VoiceMemosSection: View {
                 }
             }
         } header: {
-            SectionTitle("自动转写", info: "苹果「语音备忘录」里的新录音，停止录音约一分钟后自动转写，和录音笔的录音一样生成纪要。iPhone 上的录音由系统通过 iCloud 同步到这台 Mac，不用打开语音备忘录 App。\n\n只读取，不会改动或删除语音备忘录里的录音。开关打开之前录的不会自动转写（避免一次扣很多费用），需要的话在下面的列表里点「转写」。\n\n录音会拷一份到录音目录下的「语音备忘录」文件夹，纪要存到纪要目录。")
+            SectionTitle(title, info: "苹果「语音备忘录」里的新录音，停止录音约一分钟后自动转写，和录音笔的录音一样生成纪要。iPhone 上的录音由系统通过 iCloud 同步到这台 Mac，不用打开语音备忘录 App。\n\n只读取，不会改动或删除语音备忘录里的录音。开关打开之前录的不会自动转写（避免一次扣很多费用），需要的话在下面的列表里点「转写」。\n\n录音会拷一份到录音目录下的「语音备忘录」文件夹，纪要存到纪要目录。")
         }
         .onChange(of: s.voiceMemos) { _, on in
             if on { Task { await pipeline.scanVoiceMemos(force: true) } }
@@ -73,7 +74,8 @@ struct VoiceMemosSection: View {
         case .failed(let why)?:
             return why
         case nil:
-            return pipeline.deviceStatus(.voiceMemos).line
+            let since = s.voiceMemosSince.map { "只转写 " + DateFormatter.cached("M月d日 HH:mm").string(from: $0) + " 以后录的" } ?? "只转写从现在起录的"
+            return since + " · 上次检查 " + DateFormatter.cached("HH:mm").string(from: scan.at)
                 + (scan.settling > 0 ? " · \(scan.settling) 条正在录音或同步，好了就转写" : "")
         }
     }

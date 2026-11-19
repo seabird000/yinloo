@@ -81,11 +81,12 @@ struct DeviceHeader<Status: View>: View {
                 }
                 Spacer()
                 Button { Task { await pipeline.syncDevice(kind) } } label: {
-                    if pipeline.manualSync || (kind == .e1 && pipeline.isCopying) {
+                    if pipeline.manualSync || (kind == .e1 && pipeline.isCopying) || (kind == .c1Max && pipeline.c1Syncing) {
                         HStack(spacing: 5) { ProgressView().controlSize(.small); Text((pipeline.syncPhase ?? "同步中") + "…") }
                     } else { Text(kind.syncVerb) }
                 }
-                .disabled(!pipeline.canSync(kind) || pipeline.manualSync || pipeline.isCopying || (kind == .voiceMemos && !pipeline.settings.voiceMemos))
+                .disabled(!pipeline.canSync(kind) || pipeline.manualSync || (kind == .e1 && pipeline.isCopying)
+                          || (kind == .voiceMemos && !pipeline.settings.voiceMemos))
             }
             .padding(.vertical, 4)
         }

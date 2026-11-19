@@ -21,6 +21,7 @@ enum Demo {
         s.placeNames = ["Office-5G": "公司", "Home-WiFi": "家"]
         s.budgetYuan = 50
         s.connState = "ok"
+        s.connStates = ["aliyun": "ok", "deepseek": "ok", "custom": "ok"]
     }
 
     /// A week of typical recordings: every source, every state.

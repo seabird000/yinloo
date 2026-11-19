@@ -72,7 +72,8 @@ enum MarkdownRenderer {
             "关键词": keywords.isEmpty ? "—" : keywords,
             "地点": meta.place ?? "—",
             "录音文件": meta.audioFile.map { "[\($0.lastPathComponent)](<\($0.absoluteString)>)" } ?? "—",
-            "时间提示": meta.timeUncertain ? "\n> [!warning] 录音笔当时未联网对时，以上时间可能不准确，请人工核实。\n" : "",
+            "时间提示": (meta.timeUncertain ? "\n> [!warning] 录音笔当时的时钟没有对准，以上时间可能不准确，请人工核实。\n" : "")
+                + r.notices.map { "\n> [!warning] \($0)\n" }.joined(),
             "摘要": summary,
             "待办": actions.isEmpty ? "（未识别到待办）" : actions.map { "- [ ] \($0)" }.joined(separator: "\n"),
             "待办表格": actions.isEmpty ? "| ⬜️ | （未识别到待办） |" : actions.map { "| ⬜️ | \($0) |" }.joined(separator: "\n"),

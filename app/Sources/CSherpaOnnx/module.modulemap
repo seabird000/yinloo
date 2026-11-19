@@ -1,0 +1,7 @@
+// sherpa-onnx 的 C 接口（Apache-2.0，见 Resources/licenses/sherpa-onnx-LICENSE.txt）。
+// 头文件原样取自 sherpa-onnx v2.0.1；动态库不进 Git，build.sh 从官方发布页下载并核对校验码。
+module CSherpaOnnx [system] {
+    header "c-api.h"
+    link "sherpa-onnx-c-api"
+    export *
+}

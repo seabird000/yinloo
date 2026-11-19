@@ -45,7 +45,7 @@ struct PlatformPage: View {
                     HStack(spacing: 8) {
                         Text(s.provider.info.name).font(.e1Title)
                         ConnectionPill(testing: testing, state: s.setupProblem == nil ? s.connState : "notready", checked: PlatformTest.lastChecked,
-                                       hasKey: s.hasAPIKey && s.setupProblem == nil) {
+                                       hasKey: s.hasAPIKey && s.setupProblem == nil, local: s.provider == .local) {
                             Task { testing = true; await PlatformTest.run(s); testing = false }
                         }
                     }
@@ -72,8 +72,8 @@ struct PlatformPage: View {
                     Button("去设置") { openSubpage("platform-settings") }
                 }
             }
-            LabeledContent("识别模型", value: asrModel)
-            LabeledContent("整理模型", value: llmModel)
+            LabeledContent("① 转文字", value: asrModel)
+            LabeledContent("② 整理成纪要", value: llmModel)
             UsageRow(slices: pipeline.monthUsageBySource, budget: s.budgetYuan)
         }
     }
@@ -83,17 +83,24 @@ struct PlatformPage: View {
         case .tingwu: "阿里云 · 转写、说话人区分、摘要与待办一次完成"
         case .bailian: "阿里云百炼 · Fun-ASR 语音转写，千问整理成纪要"
         case .custom: "OpenAI 兼容接口 · " + (URL(string: s.customEndpoint)?.host ?? "未填写地址")
+        case .local: "这台 Mac · 录音不上传" + (s.noteProblem == nil ? "，\(s.noteService.shortName)整理纪要" : "，只出逐字稿")
         }
     }
     private var asrModel: String {
-        if s.provider == .custom { return s.customASRModel }
-        return s.provider.info.models.first { $0.id == s.transcriptionModel }?.label ?? s.transcriptionModel
+        if s.provider == .custom { return s.customASRModel + "（云端）" }
+        if s.provider == .local { return LocalEngines.name(s.localEngine) + "（本机）" }
+        return (s.provider.info.models.first { $0.id == s.transcriptionModel }?.label ?? s.transcriptionModel) + "（云端 · \(s.provider.info.name)）"
     }
     private var llmModel: String {
-        switch s.provider {
-        case .custom: s.customLLMModel
-        case .bailian: PlatformInfo.llmModels.first { $0.id == s.llmModel }?.label ?? s.llmModel
-        case .tingwu: "听悟内置"
+        if s.noteService == .off { return "只出逐字稿（没选整理服务）" }
+        if s.noteProblem != nil { return "只出逐字稿（" + (s.noteService == .local ? "本机大模型还没做好" : "还没设置好") + "）" }
+        switch s.noteService {
+        case .tingwu: return "通义听悟一起整理（云端）"
+        case .bailian: return (PlatformInfo.llmModels.first { $0.id == s.llmModel }?.label ?? s.llmModel) + "（云端 · 百炼）"
+        case .deepseek: return s.deepseekModel + "（云端 · DeepSeek）"
+        case .custom: return s.customLLMModel + "（云端）"
+        case .local: return "本机大模型"
+        case .off: return "只出逐字稿"
         }
     }
 
@@ -102,7 +109,8 @@ struct PlatformPage: View {
     private var workSection: some View {
         Section {
             RecorderBar(recorder: recorder, dropTargeted: dropTargeted) { chooseAndImport() }
-            PipelineSteps(focus: focus, recorder: recorder, queued: max(0, active.count - 1), blocked: s.setupProblem != nil)
+            PipelineSteps(focus: focus, recorder: recorder, queued: max(0, active.count - 1), blocked: s.setupProblem != nil,
+                          local: (focus?.provider.flatMap(Provider.init(rawValue:)) ?? s.provider) == .local)
         } header: {
             Text("录音与转写")
         }
@@ -155,6 +163,8 @@ struct ConnectionPill: View {
     let state: String
     let checked: Date?
     let hasKey: Bool
+    /// 本机转写：没有「连接」，说「已就绪 / 检查失败」
+    var local = false
     let test: () -> Void
 
     private var ok: Bool { state == "ok" }
@@ -167,7 +177,7 @@ struct ConnectionPill: View {
             } else {
                 Circle().fill(ok ? Color.e1Green : failed ? Color.e1Red : state == "notready" ? Color.orange : Color.t3).frame(width: 7, height: 7)
             }
-            Text(testing ? "测试中…" : ok ? "已连接" : failed ? "连接失败" : state == "notready" ? "未设置" : hasKey ? "未测试" : "未填密钥")
+            Text(testing ? "测试中…" : ok ? (local ? "已就绪" : "已连接") : failed ? (local ? "检查失败" : "连接失败") : state == "notready" ? "未设置" : hasKey ? "未测试" : "未填密钥")
                 .font(.e1Sub.weight(.medium)).foregroundStyle(failed ? Color.e1Red : Color.t1)
             Rectangle().fill(Color.e1Sep).frame(width: 1, height: 12)
             Button(action: test) {
@@ -184,11 +194,12 @@ struct ConnectionPill: View {
 
 /// Who runs the service, for the mark in front of its name.
 enum Vendor {
-    case aliyun, tencent, iflytek, openai, generic
+    case aliyun, tencent, iflytek, openai, generic, local
 
     @MainActor static func of(_ s: AppSettings) -> Vendor {
         switch s.provider {
         case .tingwu, .bailian: return .aliyun
+        case .local: return .local
         case .custom:
             let host = (URL(string: s.customEndpoint)?.host ?? "").lowercased()
             if host.contains("aliyun") || host.contains("dashscope") { return .aliyun }
@@ -231,6 +242,8 @@ struct VendorBadge: View {
             case .openai: mark("AI", .white)
             case .generic:
                 Image(systemName: "server.rack").font(.system(size: size * 0.42, weight: .medium)).foregroundStyle(Color.t2)
+            case .local:
+                Image(systemName: "laptopcomputer").font(.system(size: size * 0.42, weight: .medium)).foregroundStyle(Color.e1Green)
             }
         }
         .frame(width: size, height: size)
@@ -238,7 +251,7 @@ struct VendorBadge: View {
 
     private var tileFill: Color {
         switch vendor {
-        case .aliyun, .generic: Color(nsColor: .controlBackgroundColor)
+        case .aliyun, .generic, .local: Color(nsColor: .controlBackgroundColor)
         case .tencent: Color(red: 0, green: 0.322, blue: 0.851)
         case .iflytek: Color(red: 0.11, green: 0.42, blue: 0.95)
         case .openai: Color.black
@@ -385,6 +398,8 @@ struct PipelineSteps: View {
     @ObservedObject var recorder: MacRecorder
     var queued = 0
     var blocked = false
+    /// 本机转写：第 2、3 步是「本机转写」「整理纪要」，不是「上传音频」「云端转写」
+    var local = false
 
     enum StepState: Equatable { case idle, active(Double?), done, waiting }
     struct Step { let symbol: String; let title: String; let state: StepState; let detail: String }
@@ -429,8 +444,8 @@ struct PipelineSteps: View {
             // Just saved: show the whole way done for a moment, then back to idle.
             return [
                 Step(symbol: "mic.fill", title: "录音 / 音频", state: .done, detail: MarkdownRenderer.duration(c.durationSec)),
-                Step(symbol: "arrow.up", title: "上传音频", state: .done, detail: "100%"),
-                Step(symbol: "waveform", title: "云端转写", state: .done, detail: "100%"),
+                Step(symbol: local ? "laptopcomputer" : "arrow.up", title: local ? "本机转写" : "上传音频", state: .done, detail: "100%"),
+                Step(symbol: local ? "sparkles" : "waveform", title: local ? "整理纪要" : "云端转写", state: .done, detail: "100%"),
                 Step(symbol: "doc.text", title: "存到本地", state: .done, detail: "已保存"),
             ]
         }
@@ -440,6 +455,8 @@ struct PipelineSteps: View {
                 s2 = .active(nil); d2 = "压缩中"
             case .uploading(let p)?:
                 s2 = .active(p); d2 = p.map { "\(Int($0 * 100))%" } ?? "上传中"
+            case .local(let p)?:
+                s2 = .active(p); d2 = p.map { "\(Int($0 * 100))%" } ?? "转写中"
             case .transcribing(let since)?:
                 s2 = .done; d2 = "100%"; s3 = .active(nil); d3 = "已用 " + JobText.clock(now.timeIntervalSince(since))
             case .writing?:
@@ -448,15 +465,15 @@ struct PipelineSteps: View {
                 let left = "等网络 \(max(0, Int(until.timeIntervalSince(now))))s"
                 if f.state == .transcribing { s2 = .done; d2 = "100%"; s3 = .waiting; d3 = left } else { s2 = .waiting; d2 = left }
             case nil:
-                if f.state == .transcribing { s2 = .done; d2 = "100%"; s3 = .active(nil); d3 = "云端处理中" }
+                if f.state == .transcribing { s2 = .done; d2 = "100%"; s3 = .active(nil); d3 = local ? "整理中" : "云端处理中" }
                 else if blocked { s2 = .waiting; d2 = "等待设置" }
                 else { d2 = "排队中" }
             }
         }
         return [
             Step(symbol: "mic.fill", title: "录音 / 音频", state: s1, detail: d1),
-            Step(symbol: "arrow.up", title: "上传音频", state: s2, detail: d2),
-            Step(symbol: "waveform", title: "云端转写", state: s3, detail: d3),
+            Step(symbol: local ? "laptopcomputer" : "arrow.up", title: local ? "本机转写" : "上传音频", state: s2, detail: d2),
+            Step(symbol: local ? "sparkles" : "waveform", title: local ? "整理纪要" : "云端转写", state: s3, detail: d3),
             Step(symbol: "doc.text", title: "存到本地", state: s4, detail: d4),
         ]
     }
@@ -507,16 +524,45 @@ enum PlatformTest {
     /// When the connection was last tested.
     static var lastChecked: Date? { UserDefaults.standard.object(forKey: "connCheckedAt") as? Date }
 
-    @MainActor static func run(_ s: AppSettings) async {
+    /// 测现在用到的云端账号（给了 only 就只测这一个）；本机转写顺便看模型装好没有。
+    @MainActor static func run(_ s: AppSettings, only: CloudAccount? = nil) async {
         defer { UserDefaults.standard.set(Date(), forKey: "connCheckedAt") }
-        if UIPreview.enabled { try? await Task.sleep(nanoseconds: 800_000_000); s.connState = "ok"; return }
-        guard let key = Pipeline.key(for: s.provider) else { s.connState = "failed:未填写访问密钥"; return }
-        do {
-            try await Pipeline.service(s.provider, settings: s, key: key).testConnection()
-            s.connState = (s.provider.info.needsAppId && s.appId.isEmpty) ? "failed:未填写应用编号" : "ok"
-        } catch {
-            s.connState = "failed:" + error.localizedDescription
+        if UIPreview.enabled {
+            try? await Task.sleep(nanoseconds: 800_000_000)
+            for a in s.accountsInUse where only == nil || only == a { s.connStates[a.rawValue] = "ok" }
+            s.connState = "ok"
+            return
         }
+        var localProblem: String?
+        if only == nil || only == s.asrAccount {
+            if let a = s.asrAccount {
+                s.connStates[a.rawValue] = await check {
+                    guard let key = Pipeline.key(for: s.provider) else { throw AppError("未填写访问密钥") }
+                    try await Pipeline.service(s.provider, settings: s, key: key).testConnection()
+                    if s.provider.info.needsAppId && s.appId.isEmpty { throw AppError("未填写应用编号") }
+                }
+            } else if !(await LocalEngines.isReady(s.localEngine)) {
+                localProblem = LocalEngines.notReadyReason(s.localEngine)
+            }
+        }
+        if let a = s.noteAccount, a != s.asrAccount, only == nil || only == a {
+            s.connStates[a.rawValue] = await check {
+                guard s.hasKey(a) else { throw AppError("未填写访问密钥") }
+                guard let w = Pipeline.noteWriter(s, asr: s.provider) else { throw AppError(s.noteProblem ?? "整理服务还没设置好") }
+                try await w.test()
+            }
+        }
+        // 总的状态：用到的账号有一个不通就算不通
+        let states = s.accountsInUse.map { s.connState($0) }
+        if let f = localProblem ?? states.first(where: { $0.hasPrefix("failed:") }).map({ String($0.dropFirst(7)) }) {
+            s.connState = "failed:" + f
+        } else {
+            s.connState = states.allSatisfy { $0 == "ok" } ? "ok" : "untested"
+        }
+    }
+
+    @MainActor private static func check(_ body: () async throws -> Void) async -> String {
+        do { try await body(); return "ok" } catch { return "failed:" + error.localizedDescription }
     }
 }
 

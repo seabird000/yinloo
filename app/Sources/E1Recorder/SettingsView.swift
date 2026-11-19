@@ -62,7 +62,7 @@ struct SettingsView: View {
     @State private var index = -1
     @State private var jumping = false
 
-    private static let subTitles = ["platform-settings": "服务选项"]
+    private static let subTitles = ["platform-settings": "服务选项", "local-models": "本机模型"]
         .merging(DeviceKind.allCases.map { ($0.subpage, $0.name) }) { a, _ in a }
 
     var body: some View {
@@ -136,7 +136,9 @@ struct SettingsView: View {
     @ViewBuilder private func subpage(_ id: String) -> some View {
         switch id {
         case "platform-settings": PlatformSettingsPage()
+        case "local-models": LocalModelsPage()
         case DeviceKind.e1.subpage: E1DevicePage()
+        case DeviceKind.c1Max.subpage: C1MaxDevicePage()
         case DeviceKind.voiceMemos.subpage: VoiceMemosDevicePage()
         default: page(selection ?? .platform)
         }

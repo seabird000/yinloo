@@ -223,7 +223,7 @@ struct Squircle: Shape {
 
 /// Sidebar icons (方案 B): gradient squircle, dark hairline, soft shadow, detailed white line glyph.
 struct SidebarIcon: View {
-    enum Glyph { case platform, storage, device, general, about, voiceMemos }
+    enum Glyph { case platform, storage, device, general, about, voiceMemos, c1Max }
     let glyph: Glyph
     var size: CGFloat = 20
 
@@ -240,6 +240,7 @@ struct SidebarIcon: View {
             case .general: (0xAEAEB3, 0x8B8B90)    // grey
             case .about: (0x3A3A3C, 0x0C0C0D)      // graphite
             case .voiceMemos: (0xFF5F57, 0xE5322D) // red, like Voice Memos' waveform
+            case .c1Max: (0x7D7AFF, 0x5856D6)      // indigo: a second recorder, not the E1's green
             }
             ctx.fill(tile, with: .linearGradient(Gradient(colors: [rgb(top), rgb(bottom)]),
                                                  startPoint: .zero, endPoint: CGPoint(x: 0, y: 20)))
@@ -320,6 +321,26 @@ struct SidebarIcon: View {
                 w.move(to: CGPoint(x: x, y: 10 - h / 2)); w.addLine(to: CGPoint(x: x, y: 10 + h / 2))
             }
             ctx.stroke(w, with: white, style: line(1.25))
+        case .c1Max:
+            // C1 Max: a wider body with a screen and one button under it
+            ctx.stroke(Path(roundedRect: CGRect(x: 5.6, y: 3.2, width: 8.8, height: 13.6), cornerRadius: 2), with: white, style: line(1.25))
+            ctx.fill(Path(roundedRect: CGRect(x: 7.3, y: 5, width: 5.4, height: 5.6), cornerRadius: 0.8), with: white)
+            ctx.fill(circle(10, 13.6, 1.1), with: white)
+        }
+    }
+}
+
+/// The C1 Max silhouette for the panel's device circle (24-unit grid): body, screen, button.
+struct C1Glyph: View {
+    var body_: Color = .white
+    var detail: Color = .indigo
+    var body: some View {
+        Canvas { ctx, sz in
+            let s = sz.width / 24
+            ctx.scaleBy(x: s, y: s)
+            ctx.fill(Path(roundedRect: CGRect(x: 6, y: 2.5, width: 12, height: 19), cornerRadius: 2.8), with: .color(body_))
+            ctx.fill(Path(roundedRect: CGRect(x: 8.2, y: 5, width: 7.6, height: 7.6), cornerRadius: 1), with: .color(detail))
+            ctx.fill(Path(ellipseIn: CGRect(x: 10.5, y: 15.2, width: 3, height: 3)), with: .color(detail))
         }
     }
 }

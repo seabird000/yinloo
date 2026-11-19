@@ -50,7 +50,7 @@ struct MenuPanel: View {
                 Text("最近转写").font(.system(size: 11, weight: .semibold)).foregroundStyle(Color.t2)
                 Spacer()
                 if !settings.isConfigured {
-                    Button("未设置转写平台 ›") { NSApp.activate(ignoringOtherApps: true); openWindow(id: "welcome") }.buttonStyle(.e1Link)
+                    Button("未设置转写平台 ›") { NSApp.activate(ignoringOtherApps: true); openWindow(id: "welcome"); MenuPanelWindow.close() }.buttonStyle(.e1Link)
                 } else {
                     CloudStatusButton()
                 }
@@ -76,6 +76,7 @@ struct MenuPanel: View {
         }
         .padding(.top, 10).padding(.bottom, 8)
         .frame(width: 300)
+        .background(PanelWindowReader())
         .task {
             // Opening the panel refreshes: WiFi mailbox and pen heartbeat, then the cloud connection.
             await pipeline.syncWifi(force: true)
@@ -116,7 +117,7 @@ struct MenuPanel: View {
 
     private func showSettings() {
         NSApp.activate(ignoringOtherApps: true)
-        openWindow(id: "settings")
+        openWindow(id: "settings"); MenuPanelWindow.close()
     }
 
     /// Import, then show Preferences › 转写, where upload and transcription progress are visible.
@@ -125,7 +126,26 @@ struct MenuPanel: View {
         Task { await pipeline.importFiles(urls) }
         SettingsNav.shared.request = .platform
         NSApp.activate(ignoringOtherApps: true)
-        openWindow(id: "settings")
+        openWindow(id: "settings"); MenuPanelWindow.close()
+    }
+}
+
+/// 菜单栏面板自己的窗口。从面板里打开偏好、欢迎页等窗口后要把面板收起来：MenuBarExtra 的窗口
+/// 不会因为别的窗口打开就自动关（2026-11-18 用户报：点「偏好…」后面板一直开着，1.4 就有）。
+@MainActor
+enum MenuPanelWindow {
+    static weak var window: NSWindow?
+    static func close() { window?.close() }
+}
+
+private struct PanelWindowReader: NSViewRepresentable {
+    func makeNSView(context: Context) -> NSView {
+        let v = NSView()
+        DispatchQueue.main.async { MenuPanelWindow.window = v.window }
+        return v
+    }
+    func updateNSView(_ v: NSView, context: Context) {
+        if let w = v.window { MenuPanelWindow.window = w }
     }
 }
 
@@ -186,7 +206,7 @@ struct PanelDeviceRow: View {
                         Button("设置…") {
                             SettingsNav.openDevice(kind)
                             NSApp.activate(ignoringOtherApps: true)
-                            openWindow(id: "settings")
+                            openWindow(id: "settings"); MenuPanelWindow.close()
                         }
                         .buttonStyle(PillButtonStyle(height: 22)).font(.e1Sub)
                     }
@@ -211,7 +231,7 @@ struct CloudStatusButton: View {
                 checking = true
                 await pipeline.checkCloud(force: true)
                 checking = false
-                if pipeline.cloudOK == false { NSApp.activate(ignoringOtherApps: true); openWindow(id: "settings") }
+                if pipeline.cloudOK == false { NSApp.activate(ignoringOtherApps: true); openWindow(id: "settings"); MenuPanelWindow.close() }
             }
         } label: {
             HStack(spacing: 4) {
@@ -576,7 +596,7 @@ struct JobMenu: View {
             Button("在访达中显示录音") { NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: a)]) }
         }
         if pipeline.canNameSpeakers(job) {
-            Button("为发言人命名…") { NSApp.activate(ignoringOtherApps: true); openWindow(id: "speakers", value: job.id) }
+            Button("为发言人命名…") { NSApp.activate(ignoringOtherApps: true); openWindow(id: "speakers", value: job.id); MenuPanelWindow.close() }
         }
         if job.state == .done { Button("用当前模板重新生成") { pipeline.rerender(job) } }
         if job.state == .failed { Button("重试") { pipeline.retry(job) } }

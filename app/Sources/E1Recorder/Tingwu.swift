@@ -8,6 +8,10 @@ struct TranscriptBundle {
     var summarization: [String: Any] = [:]
     var chapters: [[String: Any]] = []
     var assistance: [String: Any] = [:]
+    /// 要写进纪要顶部的提醒（例如漏转自检），存为 notices.json
+    var notices: [String] = []
+    /// 统一格式的转写（1.5 起），存为 transcript.json；云端结果在保存时从上面的段落转出来
+    var transcript: Transcript?
 }
 
 enum PollResult {
@@ -149,6 +153,9 @@ struct TingwuClient: TranscriptionService {
     let appId: String
     let model: String
     var transcriptionModel: String = ""
+    /// ② 选了别的大模型整理时用它，听悟自己的摘要不用；nil = 听悟一起整理
+    var note: NoteWriter? = nil
+    var hotwords: [String] = []
 
     private var genURL: URL { URL(string: ds.endpoint + "/api/v1/services/aigc/multimodal-generation/generation")! }
 
@@ -176,6 +183,10 @@ struct TingwuClient: TranscriptionService {
         case 0:
             var b = TranscriptBundle()
             b.transcription = try await ds.getJSON(out["transcriptionPath"] as? String) as? [String: Any] ?? [:]
+            if let note {
+                try await note.write(Transcript.fromTingwu(b.transcription, model: "tingwu").promptLines(), hotwords: hotwords, into: &b)
+                return .done(b)
+            }
             b.summarization = try await ds.getJSON(out["summarizationPath"] as? String) as? [String: Any] ?? [:]
             b.chapters = try await ds.getJSON(out["autoChaptersPath"] as? String) as? [[String: Any]] ?? []
             b.assistance = try await ds.getJSON(out["meetingAssistancePath"] as? String) as? [String: Any] ?? [:]
@@ -193,7 +204,8 @@ struct TingwuClient: TranscriptionService {
 struct BailianClient: TranscriptionService {
     let ds: DashScope
     let asrModel: String
-    let llmModel: String
+    /// ② 整理用的大模型；nil = 只出逐字稿
+    let note: NoteWriter?
     var hotwords: [String] = []
 
     func upload(_ file: URL) async throws -> String { try await ds.upload(file, model: asrModel) }
@@ -251,12 +263,29 @@ struct BailianClient: TranscriptionService {
     }
 
     private func summarize(_ sentences: [[String: Any]], into b: inout TranscriptBundle) async throws {
+        guard let note else { return }
         let lines = sentences.map { s -> String in
             let sec = (s["begin_time"] as? Int ?? 0) / 1000
             return String(format: "[%02d:%02d] 发言人%d：", sec / 60, sec % 60, s["speaker_id"] as? Int ?? 0) + (s["text"] as? String ?? "")
         }
-        try await summarizeTranscript(lines, ds: ds, chatURL: URL(string: ds.endpoint + "/compatible-mode/v1/chat/completions")!,
-                                      model: llmModel, hotwords: hotwords, into: &b)
+        try await note.write(lines, hotwords: hotwords, into: &b)
+    }
+}
+
+/// ② 整理成纪要用的大模型（OpenAI 兼容的 /chat/completions）：百炼千问、DeepSeek、自定义平台都走它。只发文字，不发录音。
+struct NoteWriter {
+    let ds: DashScope        // 只当带 Bearer 密钥的 HTTP 工具用
+    let chatURL: URL
+    let model: String
+
+    func write(_ lines: [String], hotwords: [String], into b: inout TranscriptBundle) async throws {
+        try await summarizeTranscript(lines, ds: ds, chatURL: chatURL, model: model, hotwords: hotwords, into: &b)
+    }
+
+    /// 连接测试：列一下模型（…/v1/chat/completions → …/v1/models）
+    func test() async throws {
+        let models = chatURL.deletingLastPathComponent().deletingLastPathComponent().appendingPathComponent("models")
+        _ = try await ds.call(ds.request(models), label: "连接测试")
     }
 }
 
@@ -281,11 +310,54 @@ func summarizeTranscript(_ lines: [String], ds: DashScope, chatURL: URL, model: 
     let content = (((res["choices"] as? [[String: Any]])?.first?["message"] as? [String: Any])?["content"] as? String) ?? "{}"
     let j = (try? JSONSerialization.jsonObject(with: Data(content.utf8))) as? [String: Any] ?? [:]
     b.summarization = ["paragraphSummary": j["summary"] as? String ?? "", "title": j["title"] as? String ?? ""]
-    b.assistance = ["keywords": j["keywords"] as? [String] ?? [],
-                    "actions": (j["todos"] as? [String] ?? []).map { ["text": $0] }]
+    b.assistance = ["keywords": SummaryParse.strings(j["keywords"]),
+                    "actions": SummaryParse.todos(j["todos"]).map { ["text": $0] }]
     b.chapters = (j["chapters"] as? [[String: Any]] ?? []).map {
-        ["start": (($0["start_sec"] as? Int) ?? Int($0["start_sec"] as? Double ?? 0)) * 1000,
+        ["start": SummaryParse.seconds($0["start_sec"]) * 1000,
          "headline": $0["title"] as? String ?? "", "summary": $0["summary"] as? String ?? ""]
+    }
+}
+
+/// 大模型给的 JSON 不总是照字段说明来：待办可能写成对象，时间可能写成「12:30」。宽松地收，别整组丢掉。
+/// （2026-11-19 本机大模型实测：只给 json_object 时，4 场里有 2 场把待办写成了对象。）
+enum SummaryParse {
+    static func strings(_ v: Any?) -> [String] {
+        (v as? [Any] ?? []).compactMap { ($0 as? String).map { $0.trimmingCharacters(in: .whitespacesAndNewlines) } }
+            .filter { !$0.isEmpty }
+    }
+
+    /// 字符串数组照收；对象取正文（text / content / task / 事项），有负责人、时间就拼上。
+    static func todos(_ v: Any?) -> [String] {
+        (v as? [Any] ?? []).compactMap { item -> String? in
+            if let s = item as? String {
+                let t = s.trimmingCharacters(in: .whitespacesAndNewlines)
+                return t.isEmpty ? nil : t
+            }
+            guard let o = item as? [String: Any] else { return nil }
+            func pick(_ keys: [String]) -> String? {
+                for k in keys { if let s = o[k] as? String, !s.trimmingCharacters(in: .whitespaces).isEmpty { return s } }
+                return nil
+            }
+            guard let text = pick(["text", "content", "task", "todo", "item", "事项", "内容", "待办"]) else { return nil }
+            let owner = pick(["owner", "assignee", "person", "who", "负责人"])
+            let due = pick(["due", "deadline", "time", "when", "截止", "时间"])
+            var parts = [String]()
+            if let owner { parts.append(owner + "：") }
+            parts.append(text)
+            if let due { parts.append("（\(due)）") }
+            return parts.joined()
+        }
+    }
+
+    /// 秒数：整数、小数、数字字符串，或「分:秒」「时:分:秒」都认；认不出给 0。
+    static func seconds(_ v: Any?) -> Int {
+        if let i = v as? Int { return max(0, i) }
+        if let d = v as? Double { return max(0, Int(d)) }
+        guard let s = (v as? String)?.trimmingCharacters(in: .whitespaces), !s.isEmpty else { return 0 }
+        if let d = Double(s) { return max(0, Int(d)) }
+        let parts = s.split(separator: ":").map { Int($0.trimmingCharacters(in: .whitespaces)) }
+        guard (2...3).contains(parts.count), parts.allSatisfy({ $0 != nil }) else { return 0 }
+        return parts.compactMap { $0 }.reduce(0) { $0 * 60 + $1 }
     }
 }
 
@@ -296,7 +368,8 @@ func summarizeTranscript(_ lines: [String], ds: DashScope, chatURL: URL, model: 
 struct CustomClient: TranscriptionService {
     let ds: DashScope            // used as a plain Bearer-token HTTP helper; endpoint = API base, e.g. https://api.openai.com/v1
     let asrModel: String
-    let llmModel: String
+    /// ② 整理用的大模型；nil = 只出逐字稿
+    let note: NoteWriter?
     var hotwords: [String] = []
 
     private var store: URL {
@@ -358,8 +431,7 @@ struct CustomClient: TranscriptionService {
             let sec = (w["start"] as? Int ?? 0) / 1000
             return String(format: "[%02d:%02d] ", sec / 60, sec % 60) + (w["text"] as? String ?? "")
         }
-        try await summarizeTranscript(lines, ds: ds, chatURL: URL(string: ds.endpoint + "/chat/completions")!, model: llmModel,
-                                      hotwords: hotwords, into: &bundle)
+        try await note?.write(lines, hotwords: hotwords, into: &bundle)
         try? FileManager.default.removeItem(at: u)
         return .done(bundle)
     }

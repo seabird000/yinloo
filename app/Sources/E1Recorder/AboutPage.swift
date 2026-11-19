@@ -53,26 +53,34 @@ struct AboutPage: View {
                 }
                 .frame(maxWidth: .infinity)
             } footer: {
-                Text("MIT 许可 · 内置 adb（Apache-2.0）")
+                Text(Self.credits)
                     .foregroundStyle(.secondary).frame(maxWidth: .infinity, alignment: .leading).multilineTextAlignment(.leading)
             }
         }
     }
 
+    /// 页脚：本应用的许可和内置的第三方组件。点名字打开包里的许可证或声明文件（系统默认的文本编辑器）；
+    /// 开发时直接运行、包里没有这些文件，就只显示文字。
+    static var credits: AttributedString {
+        func part(_ text: String, _ url: URL? = nil) -> AttributedString {
+            var s = AttributedString(text)
+            s.link = url
+            return s
+        }
+        func bundled(_ name: String) -> URL? { Bundle.main.url(forResource: name, withExtension: "txt") }
+        return part("MIT 许可", AppLinks.license) + part(" · 内置 ")
+            + part("adb", bundled("adb-NOTICE")) + part("（Apache-2.0）、")
+            + part("sherpa-onnx", bundled("sherpa-onnx-LICENSE")) + part("（Apache-2.0，")
+            + part("编入的组件", bundled("sherpa-onnx-ThirdPartyNotices")) + part("）、")
+            + part("ONNX Runtime", bundled("onnxruntime-LICENSE")) + part("（MIT，")
+            + part("第三方声明", bundled("onnxruntime-ThirdPartyNotices")) + part("）。")
+            + part("本机转写模型下载后使用：X-ASR（上海交通大学等，Apache-2.0）、Paraformer 和标点模型（阿里巴巴达摩院 FunASR），见")
+            + part("模型声明", bundled("models-NOTICE")) + part("。")
+    }
+
     private func checkUpdate() async {
         check = .checking
-        do {
-            var r = URLRequest(url: AppLinks.latestAPI, timeoutInterval: 15)
-            r.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
-            let (data, resp) = try await URLSession.shared.data(for: r)
-            guard (resp as? HTTPURLResponse)?.statusCode == 200,
-                  let tag = (try JSONSerialization.jsonObject(with: data) as? [String: Any])?["tag_name"] as? String else {
-                check = .failed; return
-            }
-            let latest = tag.trimmingCharacters(in: CharacterSet(charactersIn: "vV"))
-            check = latest.compare(AppLinks.version, options: .numeric) == .orderedDescending ? .newer(latest) : .latest
-        } catch {
-            check = .failed
-        }
+        guard let latest = await UpdateCheck.latest() else { check = .failed; return }
+        check = UpdateCheck.isNewer(latest) ? .newer(latest) : .latest
     }
 }

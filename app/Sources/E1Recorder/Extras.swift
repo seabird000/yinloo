@@ -72,18 +72,20 @@ struct SpeakerNamingView: View {
 
 // MARK: - 首次使用引导
 
+/// 四页：① 怎么转文字（默认本机，能直接下载模型）→ ② 整理成纪要（可选）→ 设备（可选）→ WiFi（可选）。
+/// 先把转文字定下来，没有录音笔的人也能走完；后面几页都能跳过，跳过只是往后走或完成，不会半路结束引导。
 struct WelcomeView: View {
     @EnvironmentObject var s: AppSettings
     @EnvironmentObject var pipeline: Pipeline
     @Environment(\.dismissWindow) private var dismissWindow
-    @State private var editingKey = false
-    @State private var editingAppId = false
-    @State private var page = ["pen": 0, "platform": 1, "wifi": 2][UserDefaults.standard.string(forKey: "previewPage") ?? ""] ?? 0
+    @ObservedObject private var models = ModelStore.shared
+    @State private var page = ["asr": 0, "platform": 0, "note": 1, "device": 2, "pen": 2, "wifi": 3][UserDefaults.standard.string(forKey: "previewPage") ?? ""] ?? 0
 
-    private let titles = ["欢迎使用音录", "转写与纪要", "WiFi 无线同步（可选）"]
+    private let titles = ["怎么转文字", "整理成纪要（可选）", "设备（可选）", "WiFi 无线同步（可选）"]
     private let subtitles = [
-        "先让这台 Mac 认出录音笔，并在笔上装好校时脚本。之后插上录音笔就会自动拷贝录音。",
-        "录音在云端转写，生成的会议纪要存进你的笔记库。",
+        "欢迎使用音录。先选录音怎么变成文字，以后随时能改。",
+        "交给大模型整理出摘要、要点和待办。不整理也行，只出逐字稿。",
+        "有搜狗 E1、C1 Max 录音笔或用语音备忘录的，在这里接上。用不上就直接点「完成」。",
         "设好之后不用插线：录音笔连上 WiFi 自动上传，这台 Mac 开着时自动取回并转写。",
     ]
 
@@ -94,31 +96,37 @@ struct WelcomeView: View {
                 Text(titles[page]).font(.title2.weight(.semibold))
                 Text(subtitles[page]).foregroundStyle(.secondary).multilineTextAlignment(.center).frame(maxWidth: 440)
                 HStack(spacing: 6) {
-                    ForEach(0..<3) { i in Circle().fill(i == page ? Color.primary.opacity(0.7) : Color.primary.opacity(0.2)).frame(width: 6, height: 6) }
+                    ForEach(0..<titles.count, id: \.self) { i in
+                        Circle().fill(i == page ? Color.primary.opacity(0.7) : Color.primary.opacity(0.2)).frame(width: 6, height: 6)
+                    }
                 }
                 .padding(.top, 4)
             }
             .padding(.top, 24)
 
             switch page {
-            case 2: WifiGuideView()
-            case 1: platformPage
-            default: penPage
+            case 3: WifiGuideView()
+            case 2: devicePage
+            case 1: notePage
+            default: asrPage
             }
 
             HStack {
                 switch page {
                 case 0:
-                    Button("稍后再说") { finish() }
                     Spacer()
-                    Button("下一步") { page = 1 }.keyboardShortcut(.defaultAction)
+                    Button("继续") { page = 1 }.keyboardShortcut(.defaultAction)
                 case 1:
                     Button("上一步") { page = 0 }
                     Spacer()
-                    Button("下一步：WiFi（可选）") { page = 2 }
-                    Button("开始使用") { finish() }.keyboardShortcut(.defaultAction)
-                default:
+                    Button("继续") { page = 2 }.keyboardShortcut(.defaultAction)
+                case 2:
                     Button("上一步") { page = 1 }
+                    Spacer()
+                    Button("下一步：WiFi（可选）") { page = 3 }
+                    Button("完成") { finish() }.keyboardShortcut(.defaultAction)
+                default:
+                    Button("上一步") { page = 2 }
                     Spacer()
                     Button("完成") { finish() }.keyboardShortcut(.defaultAction)
                 }
@@ -126,77 +134,153 @@ struct WelcomeView: View {
             .padding(20)
         }
         .frame(width: 600, height: 760)
-        .onAppear { NSApp.activate(ignoringOtherApps: true) }
-        .sheet(isPresented: $editingKey) {
-            EditSheet(title: "填写访问密钥", help: s.provider == .custom ? "自定义平台的 API Key，只保存在本机钥匙串。" : "在百炼控制台 › 密钥管理中创建，以 sk- 开头。",
-                      placeholder: s.provider == .custom ? "API Key" : "sk-…", secure: true, initial: "",
-                      validate: { k in s.provider == .custom ? (k.count >= 8 ? nil : "密钥太短") : (k.hasPrefix("sk-") && k.count >= 20 ? nil : "应以 sk- 开头") },
-                      save: { s.saveAPIKey($0) })
-        }
-        .sheet(isPresented: $editingAppId) {
-            EditSheet(title: "编辑应用编号", help: "在百炼控制台 › 应用 › 通义听悟·智能纪要 › 我的应用中复制，以 tw_ 开头。",
-                      placeholder: "tw_…", initial: s.appId, validate: { $0.hasPrefix("tw_") ? nil : "应以 tw_ 开头" },
-                      save: { s.appId = $0; s.connState = "untested" })
+        .onAppear {
+            NSApp.activate(ignoringOtherApps: true)
+            models.refresh()
+            Task { await s.refreshLocalEngine() }
         }
     }
 
-    /// Page 1: the pen — adb, then our programs on it.
-    private var penPage: some View {
+    // MARK: 第 1 页：怎么转文字
+
+    /// 本机还是云端：切回云端时回到上次用的平台（新装是通义听悟）
+    private var asrMode: Binding<String> {
+        Binding(get: { s.provider == .local ? "local" : "cloud" },
+                set: { s.setProvider($0 == "local" ? .local : s.lastCloudProvider) })
+    }
+
+    private var asrPage: some View {
         Form {
             Section {
-                Text("在录音笔上：通用设置 › 关于本机 › 连续点「MAC 地址」› 开发者模式 › 基本设置 › 打开 adb，然后用数据线连到这台 Mac。")
-                    .foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-            } header: {
-                StepHeader(number: 1, title: "打开录音笔的 adb", done: pipeline.penConnected,
-                           status: pipeline.penConnected ? "已检测到录音笔" : "等待连接…")
+                ModeCards(selection: asrMode, options: [
+                    .init(id: "local", icon: "laptopcomputer", title: "本机转写", detail: "免费，录音不出这台 Mac", badge: "推荐", tint: .e1Green),
+                    .init(id: "cloud", icon: "cloud", title: "云端", detail: "通义听悟 / 百炼，需要阿里云密钥"),
+                ])
             }
 
-            Section {
-                PenComponentRow(kind: .clock)
-            } header: {
-                StepHeader(number: 2, title: "在录音笔上安装校时脚本", done: pipeline.penComponents?.clock == .current,
-                           status: !pipeline.penConnected ? "先完成第 1 步" : pipeline.penComponents?.clock == .current ? "已安装" : "建议安装")
-            } footer: {
-                Text("搜狗的对时服务器已关闭，录音笔断电后时间会乱，录音和纪要上的时间就不准。WiFi 上传程序是可选的，在第 3 页设置。这些程序以后都在「偏好 › 设备 › 搜狗 E1 录音笔」里查看和更新。")
-                    .foregroundStyle(.secondary).frame(maxWidth: .infinity, alignment: .leading).multilineTextAlignment(.leading)
+            if s.provider == .local {
+                Section {
+                    localModelRows
+                } header: {
+                    Text("语音模型")
+                } footer: {
+                    Text("模型第一次用要下载一次，下完核对校验码。没下完也可以点「继续」，它在后台接着下；这期间来的录音先排队，下完自动转。")
+                        .foregroundStyle(.secondary).frame(maxWidth: .infinity, alignment: .leading).multilineTextAlignment(.leading)
+                }
+            } else {
+                Section {
+                    CloudASRRows()
+                } header: {
+                    Text("云端转写")
+                } footer: {
+                    Text("录音上传到你自己的阿里云账号转写，按量付费，1 小时不到 1 块钱。密钥只存在这台 Mac 的钥匙串里。")
+                        .foregroundStyle(.secondary).frame(maxWidth: .infinity, alignment: .leading).multilineTextAlignment(.leading)
+                }
             }
-
-            DeadFeaturesSection()
         }
         .formStyle(.grouped)
         .scrollContentBackground(.hidden)
     }
 
-    /// Page 2: transcription service and where notes go.
-    private var platformPage: some View {
+    /// 选中的本机模型：下载、暂停、继续，下完显示「已就绪」（复用服务选项页的下载按钮和 ModelStore）
+    @ViewBuilder private var localModelRows: some View {
+        if let m = LocalModels.find(s.localEngine) {
+            let st = models.state(m)
+            LabeledContent {
+                HStack(spacing: 8) {
+                    switch st {
+                    case .installed:
+                        Dot(kind: .ok); Text("已就绪")
+                    case .notInstalled:
+                        Text("约 \(m.downloadSize / 1_000_000) MB").foregroundStyle(.secondary)
+                    default:
+                        Text(st.label).foregroundStyle(st.isFailure ? Color.e1Red : .secondary).lineLimit(1)
+                    }
+                    ModelActions(model: m, allowDelete: false)
+                }
+            } label: {
+                Text(m.name)
+                Text(m.note)
+            }
+            if let f = st.fraction {
+                ProgressView(value: f)
+            }
+        } else {
+            // 苹果自带的引擎：在服务选项里下载和管理
+            LabeledContent(LocalEngines.name(s.localEngine)) {
+                if s.localReady {
+                    HStack(spacing: 6) { Dot(kind: .ok); Text("已就绪") }
+                } else {
+                    Text("到「偏好 › 转写 › 服务选项」里下载").foregroundStyle(.secondary)
+                }
+            }
+        }
+    }
+
+    // MARK: 第 2 页：整理成纪要
+
+    /// 用大模型整理，还是先不整理
+    private var noteMode: Binding<String> {
+        Binding(get: { s.noteService == .off ? "off" : "cloud" },
+                set: { v in
+                    if v == "off" { s.noteService = .off }
+                    else if s.noteService == .off || s.noteService == .local { s.noteService = s.defaultCloudNoteService }
+                })
+    }
+
+    private var notePage: some View {
         Form {
             Section {
-                Picker("服务平台", selection: Binding(get: { s.provider }, set: { s.setProvider($0) })) {
-                    ForEach(Provider.allCases) { Text($0.info.name).tag($0) }
-                }
-                LabeledContent("访问密钥") {
-                    HStack { Trailing(text: s.activeMaskedKey ?? "未填写"); Button(s.hasAPIKey ? "修改…" : "填写…") { editingKey = true } }
-                }
-                if s.provider.info.needsAppId {
-                    LabeledContent("应用编号") {
-                        HStack { Trailing(text: s.appId.isEmpty ? "未填写" : s.appId); Button("编辑…") { editingAppId = true } }
-                    }
-                }
-                if s.provider == .custom {
-                    Text("自定义平台的地址和模型请在「偏好 › 转写」中填写。").foregroundStyle(.secondary)
-                }
-            } header: {
-                StepHeader(number: 3, title: "设置转写平台", done: s.isConfigured, status: s.isConfigured ? "已设置" : "需要访问密钥")
+                ModeCards(selection: noteMode, options: [
+                    .init(id: "cloud", icon: "sparkles", title: "用大模型整理", detail: "DeepSeek、千问等，1 小时几分钱，要填密钥"),
+                    .init(id: "off", icon: "text.alignleft", title: "先不整理", detail: "只出逐字稿，以后随时能开", tint: .e1Green),
+                ])
+                if s.noteService != .off { NoteServiceRows() }
             } footer: {
-                Text(.init("密钥在阿里云百炼控制台 › 密钥管理中创建，只保存在这台 Mac 的钥匙串里。[打开百炼控制台…](https://bailian.console.aliyun.com/)"))
+                Text("整理时只把文字发给大模型，不发录音。")
                     .foregroundStyle(.secondary).frame(maxWidth: .infinity, alignment: .leading)
             }
 
             Section {
                 FolderRow(title: "纪要目录", path: $s.notesFolder)
             } header: {
-                StepHeader(number: 4, title: "选择纪要存放位置", done: true, status: "可随时在偏好中更改")
+                Text("纪要存在哪")
+            } footer: {
+                Text("每条录音一份 Markdown 文件，放进你的笔记库（比如 Obsidian）就能直接看。随时可以在偏好里改。")
+                    .foregroundStyle(.secondary).frame(maxWidth: .infinity, alignment: .leading).multilineTextAlignment(.leading)
             }
+        }
+        .formStyle(.grouped)
+        .scrollContentBackground(.hidden)
+    }
+
+    // MARK: 第 3 页：设备
+
+    private var devicePage: some View {
+        Form {
+            Section {
+                Text("在录音笔上：通用设置 › 关于本机 › 连续点「MAC 地址」› 开发者模式 › 基本设置 › 打开 adb，然后用数据线连到这台 Mac。")
+                    .foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            } header: {
+                StepHeader(number: 1, title: "搜狗 E1：打开录音笔的 adb", done: pipeline.penConnected,
+                           status: pipeline.penConnected ? "已检测到录音笔" : "等待连接…")
+            }
+
+            Section {
+                PenComponentRow(kind: .clock)
+            } header: {
+                StepHeader(number: 2, title: "在录音笔上装校时脚本", done: pipeline.penComponents?.clock == .current,
+                           status: !pipeline.penConnected ? "先完成第 1 步" : pipeline.penComponents?.clock == .current ? "已安装" : "建议装上")
+            } footer: {
+                Text("搜狗的对时服务器关了，录音笔断电后时间会乱，录音和纪要上的时间就不准。WiFi 上传是可选的，在下一页设置。这些以后都在「偏好 › 设备 › 搜狗 E1 录音笔」里查看和更新。")
+                    .foregroundStyle(.secondary).frame(maxWidth: .infinity, alignment: .leading).multilineTextAlignment(.leading)
+            }
+
+            DeadFeaturesSection()
+
+            C1MaxSection(title: "搜狗 C1 Max", compact: true)
+
+            VoiceMemosSection(title: "苹果语音备忘录")
         }
         .formStyle(.grouped)
         .scrollContentBackground(.hidden)
@@ -389,7 +473,7 @@ struct DeadFeaturesSection: View {
     }
 }
 
-// MARK: - WiFi 无线同步：设置与教程（引导第二页、设备页「WiFi 设置」共用）
+// MARK: - WiFi 无线同步：设置与教程（引导最后一页、设备页「WiFi 设置」共用）
 
 struct WifiGuideView: View {
     @EnvironmentObject var s: AppSettings
