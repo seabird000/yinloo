@@ -146,7 +146,7 @@ extension Pipeline {
         } catch {
             retryAt[id] = nil
             phases[id] = nil
-            update(id) { $0.state = .failed; $0.error = error.localizedDescription }
+            update(id) { $0.state = .failed; $0.error = error.localizedDescription; $0.finished = Date() }
             lastMessage = "失败：\(job.title)"
             notify("转写失败：\(job.title)", error.localizedDescription, jobId: id)
         }

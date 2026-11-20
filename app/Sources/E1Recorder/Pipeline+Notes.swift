@@ -78,7 +78,7 @@ extension Pipeline {
         let title = MarkdownRenderer.title(results: b, fallback: job.title)
         if title == MarkdownRenderer.emptyTitle, job.notePath == nil {
             // Nothing was said: no note file, just a grey record that 「清理无内容记录」 can sweep away.
-            update(job.id) { $0.state = .done; $0.notePath = nil; $0.error = nil; $0.topic = title }
+            update(job.id) { $0.state = .done; $0.notePath = nil; $0.error = nil; $0.topic = title; $0.finished = Date() }
             lastCompleted = (job.id, job.durationSec, Date())
             if !settings.keepAudio { dropLocalAudio(job) }
             Log.notes.info("没有识别到内容，不生成纪要")
@@ -102,7 +102,7 @@ extension Pipeline {
             url = Self.freeNoteURL(in: folder, created: job.created, title: title, ext: NoteExporter.fileExtension(settings.noteFormat))
         }
         try NoteExporter.write(md, to: url)
-        update(job.id) { $0.state = .done; $0.notePath = url.path; $0.error = nil; $0.topic = title }
+        update(job.id) { $0.state = .done; $0.notePath = url.path; $0.error = nil; $0.topic = title; $0.finished = Date() }
         lastCompleted = (job.id, job.durationSec, Date())
         if !settings.keepAudio { dropLocalAudio(job) }
         notify("会议纪要已生成", url.lastPathComponent, jobId: job.id)

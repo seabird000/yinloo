@@ -3,7 +3,7 @@
 # 1.4.0 起应用改名「音录」（原名「E1录音助手」）；bundle id、设置域、钥匙串条目都不变。
 set -euo pipefail
 cd "$(dirname "$0")"
-VERSION="${VERSION:-1.5.0}"
+VERSION="${VERSION:-1.5.1}"
 NAME="音录"
 DMG="build/Yinloo-$VERSION.dmg"
 APP="build/$NAME.app"

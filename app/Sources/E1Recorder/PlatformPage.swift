@@ -15,7 +15,7 @@ struct PlatformPage: View {
         pipeline.jobs.filter { $0.state == .queued || $0.state == .transcribing }.sorted { $0.updated < $1.updated }
     }
     private var finished: [Job] {
-        pipeline.jobs.filter { $0.state == .done || $0.state == .failed }.sorted { $0.created > $1.created }
+        pipeline.jobs.filter { $0.state == .done || $0.state == .failed }.sorted(by: Job.newerFirst)
     }
     /// The job the steps follow: the one being worked on, else the next in line.
     private var focus: Job? { active.first { pipeline.phases[$0.id] != nil } ?? active.first }

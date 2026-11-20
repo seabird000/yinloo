@@ -6,6 +6,7 @@ import SwiftUI
 enum DeviceKind: String, CaseIterable, Identifiable {
     case e1
     case c1Max
+    case usbDisk
     case voiceMemos
     var id: String { rawValue }
 
@@ -13,6 +14,7 @@ enum DeviceKind: String, CaseIterable, Identifiable {
         switch self {
         case .e1: "搜狗 E1 录音笔"
         case .c1Max: "搜狗 C1 Max"
+        case .usbDisk: "U 盘录音笔"
         case .voiceMemos: "语音备忘录"
         }
     }
@@ -22,6 +24,7 @@ enum DeviceKind: String, CaseIterable, Identifiable {
         switch self {
         case .e1: .device
         case .c1Max: .c1Max
+        case .usbDisk: .usbDisk
         case .voiceMemos: .voiceMemos
         }
     }
@@ -30,6 +33,7 @@ enum DeviceKind: String, CaseIterable, Identifiable {
         switch self {
         case .e1: "搜狗E1"
         case .c1Max: "搜狗C1Max"
+        case .usbDisk: "U盘录音笔"   // 实际按每支笔的名字分文件夹
         case .voiceMemos: "语音备忘录"
         }
     }
@@ -61,12 +65,13 @@ extension DeviceStatus.Level {
 }
 
 extension Pipeline {
-    /// Devices in the menu bar panel: the E1 always, C1 Max once it has been plugged in, Voice Memos once switched on.
+    /// Devices in the menu bar panel: the E1 always, C1 Max once it has been plugged in, U 盘录音笔 once one is added or recognised, Voice Memos once switched on.
     var panelDevices: [DeviceKind] {
         DeviceKind.allCases.filter {
             switch $0 {
             case .e1: true
             case .c1Max: c1EverSeen || c1.phase != .absent
+            case .usbDisk: !usbEntries.isEmpty || usb.disks.contains(where: \.guarded)
             case .voiceMemos: settings.voiceMemos
             }
         }
@@ -74,20 +79,21 @@ extension Pipeline {
 
     func isEnabled(_ d: DeviceKind) -> Bool {
         switch d {
-        case .e1, .c1Max: true
+        case .e1, .c1Max, .usbDisk: true
         case .voiceMemos: settings.voiceMemos
         }
     }
 
     /// The latest time any device was synced or looked at (for 「立即同步 · 上次 …」).
     var lastAnySync: Date? {
-        [lastSync, lastWifiCheck, c1LastSync, settings.voiceMemos ? memoScan?.at : nil].compactMap { $0 }.max()
+        [lastSync, lastWifiCheck, c1LastSync, usb.lastSync, settings.voiceMemos ? memoScan?.at : nil].compactMap { $0 }.max()
     }
 
     func deviceStatus(_ d: DeviceKind) -> DeviceStatus {
         switch d {
         case .e1: e1Status
         case .c1Max: c1Status
+        case .usbDisk: usbStatus
         case .voiceMemos: voiceMemoStatus
         }
     }
@@ -144,7 +150,22 @@ extension Pipeline {
 struct DeviceIcon: View {
     let kind: DeviceKind
     var size: CGFloat = 32
-    var body: some View { SidebarIcon(glyph: kind.glyph, size: size) }
+    var body: some View {
+        // 语音备忘录用系统里苹果自己的应用图标（运行时从系统读，不随安装包分发），用户一眼认得；读不到才用自己画的
+        if kind == .voiceMemos, let icon = Self.voiceMemosIcon {
+            // 系统应用图标四周留了约 10% 的透明边，放大一点让主体和其他设备的方块一样大
+            Image(nsImage: icon).resizable().interpolation(.high)
+                .frame(width: size * 1.22, height: size * 1.22).frame(width: size, height: size)
+        } else {
+            SidebarIcon(glyph: kind.glyph, size: size)
+        }
+    }
+
+    static let voiceMemosIcon: NSImage? = {
+        let ws = NSWorkspace.shared
+        guard let url = ws.urlForApplication(withBundleIdentifier: "com.apple.VoiceMemos") else { return nil }
+        return ws.icon(forFile: url.path)
+    }()
 }
 
 struct PanelDeviceGlyph: View {
@@ -152,7 +173,7 @@ struct PanelDeviceGlyph: View {
     let active: Bool
     var body: some View {
         ZStack {
-            Circle().fill(active ? (kind == .voiceMemos ? Color(red: 0.93, green: 0.25, blue: 0.24) : kind == .c1Max ? Color.indigo : Color.e1Blue)
+            Circle().fill(active ? (kind == .voiceMemos ? Color(red: 0.93, green: 0.25, blue: 0.24) : kind == .c1Max ? Color.indigo : kind == .usbDisk ? Color.teal : Color.e1Blue)
                           : Color.primary.opacity(0.08))
             switch kind {
             case .e1:
@@ -161,6 +182,9 @@ struct PanelDeviceGlyph: View {
             case .c1Max:
                 C1Glyph(body_: active ? .white : Color.primary.opacity(0.3), detail: active ? .indigo : Color.dyn(0xDCDCDE, 0x4A4A4C))
                     .frame(width: 16, height: 16)
+            case .usbDisk:
+                Image(systemName: "externaldrive.fill").font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(active ? Color.white : Color.primary.opacity(0.35))
             case .voiceMemos:
                 Image(systemName: "waveform").font(.system(size: 11, weight: .semibold))
                     .foregroundStyle(active ? Color.white : Color.primary.opacity(0.35))

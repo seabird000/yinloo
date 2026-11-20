@@ -177,7 +177,15 @@ enum AppLinks {
     /// 检查更新先读这里（阿里云北京，发版时更新，单独设公共读），读不到再读 GitHub。见 UpdateCheck。
     static let latestCN = URL(string: "https://yinloo-download.oss-cn-beijing.aliyuncs.com/latest.json")!
     static let latestAPI = URL(string: "https://api.github.com/repos/seabird000/yinloo/releases/latest")!
+    /// U 盘录音笔的设备档案（单独设公共读），读不到再读 GitHub 公开仓库里的同一份。见 DeviceProfiles。
+    static let devicesCN = URL(string: "https://yinloo-download.oss-cn-beijing.aliyuncs.com/devices.json")!
+    static let devicesGitHub = URL(string: "https://raw.githubusercontent.com/seabird000/yinloo/main/app/release/devices.json")!
     static let buildMonth = "2026 年 11 月"
+
+    /// 阿里云下载空间开了防盗链（只放行带 yinloo.com 来源的请求），应用发的请求要带上这个来源，否则 403。
+    static func addReferer(_ r: inout URLRequest) {
+        if r.url?.host?.hasSuffix("aliyuncs.com") == true { r.setValue("https://yinloo.com/", forHTTPHeaderField: "Referer") }
+    }
     static var version: String { Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "开发版" }
 }
 

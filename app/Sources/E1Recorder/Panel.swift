@@ -135,7 +135,16 @@ struct MenuPanel: View {
 @MainActor
 enum MenuPanelWindow {
     static weak var window: NSWindow?
-    static func close() { window?.close() }
+    /// 收起面板。打开的窗口激活时系统有时会把面板又显示回来，所以过一会儿再收一次。
+    /// 认窗口：记下的那个，没记到就按菜单栏面板窗口的类名找。
+    static func close() {
+        hide()
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { hide() }
+    }
+    private static func hide() {
+        let panels = NSApp.windows.filter { $0 === window || String(describing: type(of: $0)).contains("MenuBarExtra") }
+        for w in panels where w.isVisible { w.close() }
+    }
 }
 
 private struct PanelWindowReader: NSViewRepresentable {

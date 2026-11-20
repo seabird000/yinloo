@@ -81,7 +81,7 @@ struct DeviceHeader<Status: View>: View {
                 }
                 Spacer()
                 Button { Task { await pipeline.syncDevice(kind) } } label: {
-                    if pipeline.manualSync || (kind == .e1 && pipeline.isCopying) || (kind == .c1Max && pipeline.c1Syncing) {
+                    if pipeline.manualSync || (kind == .e1 && pipeline.isCopying) || (kind == .c1Max && pipeline.c1Syncing) || (kind == .usbDisk && !pipeline.usb.syncing.isEmpty) {
                         HStack(spacing: 5) { ProgressView().controlSize(.small); Text((pipeline.syncPhase ?? "同步中") + "…") }
                     } else { Text(kind.syncVerb) }
                 }

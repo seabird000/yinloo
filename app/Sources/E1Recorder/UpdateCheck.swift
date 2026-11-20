@@ -22,6 +22,7 @@ enum UpdateCheck {
     static func latest(sources: [Source] = sources, session: URLSession = .shared) async -> String? {
         for s in sources {
             var r = URLRequest(url: s.url, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 15)
+            AppLinks.addReferer(&r)
             if let a = s.accept { r.setValue(a, forHTTPHeaderField: "Accept") }
             guard let (data, resp) = try? await session.data(for: r),
                   (resp as? HTTPURLResponse)?.statusCode == 200,

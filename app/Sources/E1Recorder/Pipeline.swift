@@ -24,6 +24,15 @@ struct Job: Codable, Identifiable, Equatable {
     var topic: String?                    // meeting topic from the transcript, shown instead of the pen's title
     var bssids: [String]?                 // WiFi heard while recording (strongest first), for the place
     var updated: Date
+    /// 转写结束（完成或失败）的时间；1.5.1 以前的记录没有，用 updated 代替。
+    var finished: Date? = nil
+
+    /// 列表按「转写先后」排：还在排队、转写中的在最前，其余按结束时间，新的在上。
+    var listOrder: (Bool, Date) { (state == .queued || state == .transcribing, finished ?? updated) }
+    static func newerFirst(_ a: Job, _ b: Job) -> Bool {
+        let x = a.listOrder, y = b.listOrder
+        return x.0 != y.0 ? x.0 : x.1 > y.1
+    }
 
     var stateLabel: String {
         switch state {
@@ -88,6 +97,8 @@ final class Pipeline: ObservableObject {
     @Published var c1CopyDone = 0
     @Published var c1CopyTotal = 0
     @Published var c1LastSync: Date?
+    @Published var usb = UsbState()
+    @Published var profileLib = DeviceProfiles.Library()
 
     var wifiOnline: Bool { settings.wifiReady && (wifiStatus?.isOnline ?? false) }
     var settingsWifiReady: Bool { settings.wifiReady }
@@ -158,6 +169,12 @@ final class Pipeline: ObservableObject {
         Task { await loop() }
         Task { await wifiLoop() }
         if !UIPreview.enabled { C1MaxDisk.shared.start() }
+        if !UIPreview.enabled {
+            loadProfiles()
+            pushUsbRules()
+            UsbDisk.shared.start()
+            Task { await usbLoop() }
+        }
         Task { await animateIcon() }
         Task { await weeklyUpdateCheck() }
         // Check the mailbox right away on launch and whenever the Mac wakes up.
@@ -432,6 +449,7 @@ final class Pipeline: ObservableObject {
             }
         }
         previewC1()
+        previewUsb()
         penRecordingCount = 4
         if penRecordings.isEmpty {
             let base = Calendar.current.date(bySettingHour: 9, minute: 30, second: 0, of: Date())!
@@ -452,6 +470,7 @@ final class Pipeline: ObservableObject {
         let before = jobs.count
         let t0 = Date()
         let pen = only == nil || only == .e1, memos = only == nil || only == .voiceMemos, c1Max = only == nil || only == .c1Max
+        let usbRec = only == nil || only == .usbDisk
         if UIPreview.enabled {
             if pen { syncPhase = "检查录音笔"; try? await Task.sleep(nanoseconds: 700_000_000) }
             if c1Max, c1.volume != nil { syncPhase = "检查 C1 Max"; try? await Task.sleep(nanoseconds: 700_000_000) }
@@ -460,6 +479,7 @@ final class Pipeline: ObservableObject {
             if pen, penConnected { syncPhase = "检查录音笔"; await syncPen() }
             if pen, settings.wifiReady { syncPhase = "检查云端"; await syncWifi(force: true) }
             if c1Max, c1.volume != nil { syncPhase = "检查 C1 Max"; await syncC1Max(manual: only == .c1Max) }
+            if usbRec, usbAnyReady { syncPhase = "检查 U 盘录音笔"; await syncAllUsb(manual: only == .usbDisk) }
             if memos, settings.voiceMemos || only == .voiceMemos { syncPhase = "检查语音备忘录"; await scanVoiceMemos(force: true) }
         }
         // Keep the progress visible long enough to read, then say what happened.
@@ -538,11 +558,12 @@ final class Pipeline: ObservableObject {
     /// "USB" or "WiFi" while files are being copied or fetched.
     @Published var copySource = "USB"
 
-    var canSyncNow: Bool { penConnected || settings.wifiReady || settings.voiceMemos || c1.volume != nil }
+    var canSyncNow: Bool { penConnected || settings.wifiReady || settings.voiceMemos || c1.volume != nil || usbAnyReady }
     func canSync(_ d: DeviceKind) -> Bool {
         switch d {
         case .e1: penConnected || settings.wifiReady
         case .c1Max: c1.volume != nil && !c1Syncing
+        case .usbDisk: usbAnyReady && usb.syncing.isEmpty
         case .voiceMemos: true
         }
     }
@@ -574,9 +595,8 @@ final class Pipeline: ObservableObject {
     }
 
 
-    /// Most recent recordings first, by when they were recorded.
-    /// Most recent recordings first; recordings with nothing in them stay out of the menu bar list.
-    var recentJobs: [Job] { Array(jobs.filter { !isEmptyRecord($0) }.sorted { $0.created > $1.created }.prefix(5)) }
+    /// 最近转写的在上（不按录音时间）；没内容的录音不进菜单栏列表。
+    var recentJobs: [Job] { Array(jobs.filter { !isEmptyRecord($0) }.sorted(by: Job.newerFirst).prefix(5)) }
 
     func place(of job: Job) -> String? { settings.place(for: job.bssids) }
 

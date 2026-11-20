@@ -118,4 +118,13 @@ final class UpdateCheckTests: XCTestCase {
         let models = try String(contentsOf: app.appendingPathComponent("Resources/licenses/models-NOTICE.txt"), encoding: .utf8)
         for m in LocalModels.all { for a in m.archives { XCTAssertTrue(models.contains(a.name), a.name) } }
     }
+
+    func testAliyunRequestsCarryTheReferer() {
+        var a = URLRequest(url: AppLinks.latestCN)
+        AppLinks.addReferer(&a)
+        XCTAssertEqual(a.value(forHTTPHeaderField: "Referer"), "https://yinloo.com/")
+        var g = URLRequest(url: AppLinks.latestAPI)
+        AppLinks.addReferer(&g)
+        XCTAssertNil(g.value(forHTTPHeaderField: "Referer"))
+    }
 }

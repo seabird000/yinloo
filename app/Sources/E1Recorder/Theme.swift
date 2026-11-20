@@ -223,7 +223,7 @@ struct Squircle: Shape {
 
 /// Sidebar icons (方案 B): gradient squircle, dark hairline, soft shadow, detailed white line glyph.
 struct SidebarIcon: View {
-    enum Glyph { case platform, storage, device, general, about, voiceMemos, c1Max }
+    enum Glyph { case platform, storage, device, general, about, voiceMemos, c1Max, usbDisk }
     let glyph: Glyph
     var size: CGFloat = 20
 
@@ -241,6 +241,7 @@ struct SidebarIcon: View {
             case .about: (0x3A3A3C, 0x0C0C0D)      // graphite
             case .voiceMemos: (0xFF5F57, 0xE5322D) // red, like Voice Memos' waveform
             case .c1Max: (0x7D7AFF, 0x5856D6)      // indigo: a second recorder, not the E1's green
+            case .usbDisk: (0x4FD1C5, 0x1BA39C)    // teal: any recorder that shows up as a USB drive
             }
             ctx.fill(tile, with: .linearGradient(Gradient(colors: [rgb(top), rgb(bottom)]),
                                                  startPoint: .zero, endPoint: CGPoint(x: 0, y: 20)))
@@ -326,6 +327,14 @@ struct SidebarIcon: View {
             ctx.stroke(Path(roundedRect: CGRect(x: 5.6, y: 3.2, width: 8.8, height: 13.6), cornerRadius: 2), with: white, style: line(1.25))
             ctx.fill(Path(roundedRect: CGRect(x: 7.3, y: 5, width: 5.4, height: 5.6), cornerRadius: 0.8), with: white)
             ctx.fill(circle(10, 13.6, 1.1), with: white)
+        case .usbDisk:
+            // a plain recorder: slim body, a speaker grille at the top, a USB plug at the bottom
+            ctx.stroke(Path(roundedRect: CGRect(x: 6.6, y: 2.8, width: 6.8, height: 11.6), cornerRadius: 1.8), with: white, style: line(1.25))
+            var g = Path()
+            for y in [5.2, 6.8, 8.4] as [CGFloat] { g.move(to: CGPoint(x: 8.6, y: y)); g.addLine(to: CGPoint(x: 11.4, y: y)) }
+            ctx.stroke(g, with: white, style: line(1.0))
+            ctx.fill(circle(10, 11.4, 0.9), with: white)
+            ctx.stroke(Path(roundedRect: CGRect(x: 8.4, y: 14.4, width: 3.2, height: 2.8), cornerRadius: 0.5), with: white, style: line(1.1))
         }
     }
 }

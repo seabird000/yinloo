@@ -139,6 +139,7 @@ struct SettingsView: View {
         case "local-models": LocalModelsPage()
         case DeviceKind.e1.subpage: E1DevicePage()
         case DeviceKind.c1Max.subpage: C1MaxDevicePage()
+        case DeviceKind.usbDisk.subpage: UsbRecorderDevicePage()
         case DeviceKind.voiceMemos.subpage: VoiceMemosDevicePage()
         default: page(selection ?? .platform)
         }

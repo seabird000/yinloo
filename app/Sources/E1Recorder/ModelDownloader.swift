@@ -141,6 +141,7 @@ final class RangeDownload: NSObject, URLSessionDataDelegate, @unchecked Sendable
         handle = h
         defer { try? h.close() }
         var req = URLRequest(url: url)
+        AppLinks.addReferer(&req)
         if written > 0 { req.setValue("bytes=\(written)-", forHTTPHeaderField: "Range") }
         let queue = OperationQueue()
         queue.maxConcurrentOperationCount = 1
